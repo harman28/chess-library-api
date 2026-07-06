@@ -10,7 +10,8 @@ MAX_PGN_BYTES = 5 * 1024 * 1024  # 5MB, generous headroom over real collections
 ID_BYTES = 18  # secrets.token_urlsafe(18) -> 24 url-safe chars, ~144 bits of entropy
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": os.environ.get("ALLOWED_ORIGIN", "*")}})
+ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGIN", "*").split(",") if o.strip()]
+CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS}})
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 pool = psycopg2.pool.SimpleConnectionPool(1, 10, DATABASE_URL)
