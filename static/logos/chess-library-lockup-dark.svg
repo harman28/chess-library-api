@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 344 72" role="img" aria-label="Chess Library logo">
+  <rect width="344" height="72" fill="#0d1420"/>
+  <g transform="translate(6 4)">
+    <line x1="5" y1="53" x2="59" y2="53" stroke="#e8edf5" stroke-width="2.5" stroke-linecap="round"/>
+    <rect x="7" y="27" width="7" height="26" rx="1" fill="#e5645f"/>
+    <rect x="8.5" y="31" width="4" height="1.5" fill="#0d1420" opacity="0.35"/>
+    <rect x="16" y="21" width="9" height="32" rx="1" fill="#6ab0f3"/>
+    <rect x="17.5" y="25" width="6" height="1.5" fill="#0d1420" opacity="0.35"/>
+    <rect x="17.5" y="28" width="6" height="1.5" fill="#0d1420" opacity="0.35"/>
+    <path d="M27 53 L27 13 L30 13 L30 18 L31.5 18 L31.5 13 L34.5 13 L34.5 18 L36 18 L36 13 L39 13 L39 53 Z" fill="#e8b93e"/>
+    <text x="33" y="40" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-weight="bold" font-size="16" fill="#0d1420">!</text>
+    <rect x="41" y="24" width="8" height="29" rx="1" fill="#4cc38a"/>
+    <rect x="42.5" y="28" width="5" height="1.5" fill="#0d1420" opacity="0.35"/>
+    <rect x="51" y="29" width="6" height="24" rx="1" fill="#e8edf5"/>
+    <rect x="52.3" y="33" width="3.4" height="1.5" fill="#0d1420" opacity="0.35"/>
+  </g>
+  <text x="80" y="46" font-family="Georgia, 'Times New Roman', serif" font-size="30" letter-spacing="0.5">
+    <tspan fill="#e8edf5">Chess </tspan><tspan fill="#e8b93e">Library</tspan>
+  </text>
+</svg>
