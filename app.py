@@ -14,7 +14,8 @@ from PIL import Image, ImageDraw
 from werkzeug.security import generate_password_hash, check_password_hash
 
 MAX_PGN_BYTES = 5 * 1024 * 1024  # 5MB, generous headroom over real collections
-SHARE_MAX_PGN_BYTES = 64 * 1024  # a single shared game never needs anywhere near the whole-library cap
+SHARE_MAX_PGN_BYTES = 512 * 1024  # comfortable headroom for SHARE_MAX_GAMES games, well short of the whole-library cap
+SHARE_MAX_GAMES = 25  # keeps "share a selection" meaningfully distinct from "share my whole library"
 SHARE_RATE_LIMIT_PER_DAY = 50  # per-IP; blast radius here is just a DB row, same as the existing anonymous save endpoint
 ID_BYTES = 18  # secrets.token_urlsafe(18) -> 24 url-safe chars, ~144 bits of entropy
 SESSION_TOKEN_BYTES = 32  # secrets.token_urlsafe(32) -> ~43 url-safe chars, ~256 bits
@@ -239,17 +240,22 @@ def render_board_png(board):
     return buf
 
 
-def parse_single_game(pgn_text):
+def parse_all_games(pgn_text):
+    games = []
     try:
-        return chess.pgn.read_game(io.StringIO(pgn_text))
+        stream = io.StringIO(pgn_text)
+        while True:
+            game = chess.pgn.read_game(stream)
+            if game is None:
+                break
+            games.append(game)
     except Exception:
-        return None
+        pass
+    return games
 
 
 def board_at_halfway(game):
     board = game.board()
-    if game is None:
-        return chess.Board()
     try:
         moves = list(game.mainline_moves())
     except Exception:
@@ -269,18 +275,31 @@ def _clean_header(value):
     return value[:200]
 
 
-def build_share_meta(game, share_url, image_url):
-    if game is not None:
+def build_share_meta(games, player_name, share_url, image_url):
+    count = len(games)
+    if count == 1:
+        game = games[0]
         white = _clean_header(game.headers.get("White"))
         black = _clean_header(game.headers.get("Black"))
         event = _clean_header(game.headers.get("Event"))
         date = _clean_header(game.headers.get("Date"))
         result = _clean_header(game.headers.get("Result"))
+        title = f"{white or 'White'} vs {black or 'Black'}"
+        description = " · ".join(p for p in (event, date, result) if p) or "A shared game from Chess Library"
     else:
-        white = black = event = date = result = ""
-
-    title = f"{white or 'White'} vs {black or 'Black'}"
-    description = " · ".join(p for p in (event, date, result) if p) or "A shared game from Chess Library"
+        player_name = _clean_header(player_name)
+        title = f"{count} games from {player_name}" if player_name else f"{count} shared games"
+        distinct_events = []
+        for g in games:
+            e = _clean_header(g.headers.get("Event"))
+            if e and e not in distinct_events:
+                distinct_events.append(e)
+        if distinct_events:
+            description = ", ".join(distinct_events[:3])
+            if len(distinct_events) > 3:
+                description += ", and more"
+        else:
+            description = f"{count} games shared from Chess Library"
 
     return {
         "title": html.escape(title[:200]),
@@ -354,7 +373,13 @@ def create_game_share(env):
     if not pgn.strip():
         return jsonify(error="pgn is required"), 400
     if len(pgn.encode("utf-8")) > SHARE_MAX_PGN_BYTES:
-        return jsonify(error="pgn is too large for a single-game share"), 413
+        return jsonify(error="pgn is too large for a share link"), 413
+
+    game_count = len(parse_all_games(pgn))
+    if game_count == 0:
+        return jsonify(error="Couldn't find any valid games in that PGN"), 400
+    if game_count > SHARE_MAX_GAMES:
+        return jsonify(error=f"You can share at most {SHARE_MAX_GAMES} games in one link"), 400
 
     library_id = secrets.token_urlsafe(ID_BYTES)
     libraries_table = LIBRARIES_TABLES[env]
@@ -379,16 +404,17 @@ def share_page(env, library_id):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT pgn FROM {libraries_table} WHERE id = %s", (library_id,))
+            cur.execute(f"SELECT player_name, pgn FROM {libraries_table} WHERE id = %s", (library_id,))
             row = cur.fetchone()
     finally:
         put_conn(conn)
     if row is None:
         return jsonify(error="not found"), 404
 
-    game = parse_single_game(row[0])
+    player_name, pgn = row
+    games = parse_all_games(pgn)
     share_url = share_url_for(env, library_id)
-    meta = build_share_meta(game, share_url, share_url + "/preview.png")
+    meta = build_share_meta(games, player_name, share_url, share_url + "/preview.png")
 
     html_content = inject_share_meta(read_static_html(env), meta)
     resp = app.response_class(html_content, mimetype="text/html")
@@ -410,8 +436,8 @@ def share_preview_png(env, library_id):
     if not PIECE_IMAGES:
         return jsonify(error="preview image is temporarily unavailable"), 503
 
-    game = parse_single_game(row[0])
-    board = board_at_halfway(game) if game is not None else chess.Board()
+    games = parse_all_games(row[0])
+    board = board_at_halfway(games[0]) if games else chess.Board()
     buf = render_board_png(board)
 
     resp = app.response_class(buf.read(), mimetype="image/png")

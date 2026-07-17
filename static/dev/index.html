@@ -374,6 +374,7 @@ body.sheet-open .game-sheet{transform:translateY(0)}
       <span class="sel-count" id="selCount">0 selected</span>
       <div class="sel-group">
         <button id="bulkEditBtn" type="button" aria-label="Edit selected" title="Edit selected">✎</button>
+        <button id="shareSelectedBtn" type="button" aria-label="Share selected" title="Share selected"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg></button>
         <button id="exportBtn" type="button" aria-label="Export selected" title="Export selected"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
         <button id="deleteBtn" type="button" class="seg-danger" aria-label="Delete selected" title="Delete selected"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
       </div>
@@ -483,8 +484,8 @@ body.sheet-open .game-sheet{transform:translateY(0)}
 </div>
 <div id="shareGameModal" class="modal-overlay hidden">
   <div class="modal-card">
-    <h2>Share This Game</h2>
-    <p class="save-link-note">Anyone with this link can view this one game. Great for sharing over WhatsApp - the link shows a preview with the board position, players, and event.</p>
+    <h2 id="shareGameModalTitle">Share This Game</h2>
+    <p class="save-link-note" id="shareGameModalNote">Anyone with this link can view this one game. Great for sharing over WhatsApp - the link shows a preview with the board position, players, and event.</p>
     <div class="save-link-box" id="shareGameLink"></div>
     <div class="save-link-actions">
       <button id="copyShareGameLinkBtn" type="button">Copy</button>
@@ -1455,7 +1456,7 @@ document.getElementById("sheetEditBtn").addEventListener("click",()=>{
   const g=games.find(x=>x.idx===currentSheetGameIdx); if(g) openEditGameModal(g);
 });
 document.getElementById("sheetShareBtn").addEventListener("click",()=>{
-  const g=games.find(x=>x.idx===currentSheetGameIdx); if(g) shareGame(g, document.getElementById("sheetShareBtn"));
+  const g=games.find(x=>x.idx===currentSheetGameIdx); if(g) shareGames([g], document.getElementById("sheetShareBtn"));
 });
 document.getElementById("sheetCopyBtn").addEventListener("click",()=>{
   const g=games.find(x=>x.idx===currentSheetGameIdx); if(!g) return;
@@ -1642,7 +1643,7 @@ document.getElementById("rows").addEventListener("click",(e)=>{
   const editBtn=e.target.closest("button.edit-game-btn");
   if(editBtn){ e.stopPropagation(); const i=parseInt(editBtn.dataset.i); const g=games.find(x=>x.idx===i); if(g) openEditGameModal(g); return; }
   const shareBtn=e.target.closest("button.share-game-btn");
-  if(shareBtn){ e.stopPropagation(); const i=parseInt(shareBtn.dataset.i); const g=games.find(x=>x.idx===i); if(g) shareGame(g, shareBtn); return; }
+  if(shareBtn){ e.stopPropagation(); const i=parseInt(shareBtn.dataset.i); const g=games.find(x=>x.idx===i); if(g) shareGames([g], shareBtn); return; }
   const commentBtn=e.target.closest(".move-comment-btn");
   if(commentBtn){ e.stopPropagation(); openCommentModal(parseInt(commentBtn.dataset.gameIdx), parseInt(commentBtn.dataset.moveIdx)); return; }
   const moveSpan=e.target.closest(".move-san-editable");
@@ -1713,6 +1714,7 @@ function updateActionButtons(){
   const noGames=games.length===0;
   document.getElementById("exportBtn").disabled = noGames;
   document.getElementById("deleteBtn").disabled = noGames;
+  document.getElementById("shareSelectedBtn").disabled = noGames;
 }
 function updateSelCount(){
   document.getElementById("selCount").textContent = selected.size+" selected";
@@ -1756,6 +1758,12 @@ function buildExport(){ const chosen=selected.size>0?games.filter(g=>selected.ha
 function downloadBlob(text, filename){ const blob=new Blob([text],{type:"application/x-chess-pgn"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=filename; a.click(); URL.revokeObjectURL(url); }
 document.getElementById("enterSelectionBtn").addEventListener("click",()=>{
   enterSelectionMode();
+});
+document.getElementById("shareSelectedBtn").addEventListener("click", async ()=>{
+  if(selected.size===0){ alert("No games selected."); return; }
+  const chosen=games.filter(g=>selected.has(g.idx));
+  const ok=await shareGames(chosen, document.getElementById("shareSelectedBtn"));
+  if(ok) exitSelectionMode();
 });
 document.getElementById("exportBtn").addEventListener("click",()=>{
   if(selected.size===0){ alert("No games selected. Downloading all."); document.querySelectorAll("#rows input[type='checkbox'], #mobileList input[type='checkbox']").forEach(cb=>cb.checked=true);
@@ -2000,22 +2008,35 @@ document.getElementById("saveLibraryDoneBtn").addEventListener("click", closeSav
 document.getElementById("saveLibraryModal").addEventListener("click",(e)=>{ if(e.target.id==="saveLibraryModal") closeSaveLibraryModal(); });
 document.getElementById("saveModalLoginBtn").addEventListener("click",()=>{ closeSaveLibraryModal(); openAuthModal("login"); });
 document.getElementById("saveModalSignupBtn").addEventListener("click",()=>{ closeSaveLibraryModal(); openAuthModal("signup"); });
-async function shareGame(game, btn){
+const SHARE_MAX_GAMES=25;
+async function shareGames(gamesToShare, btn){
+  if(!gamesToShare.length) return false;
+  if(gamesToShare.length>SHARE_MAX_GAMES){
+    alert("You can share at most "+SHARE_MAX_GAMES+" games in one link. You have "+gamesToShare.length+" selected.");
+    return false;
+  }
   const oldLabel=btn?btn.innerHTML:null;
   if(btn){ btn.disabled=true; }
   try{
-    const pgn=buildPgnForGames([game]);
+    const pgn=buildPgnForGames(gamesToShare);
     const res=await fetch(API_BASE+API_GAME_SHARE_PATH, {
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({playerName, pgn})
     });
-    if(!res.ok) throw new Error("HTTP "+res.status);
-    const data=await res.json();
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok){ alert(data.error||"Couldn't create a share link right now. Please try again in a moment."); return false; }
+    const count=gamesToShare.length;
+    document.getElementById("shareGameModalTitle").textContent = count===1 ? "Share This Game" : "Share These Games";
+    document.getElementById("shareGameModalNote").textContent = count===1
+      ? "Anyone with this link can view this one game. Great for sharing over WhatsApp - the link shows a preview with the board position, players, and event."
+      : "Anyone with this link can view these "+count+" games. Great for sharing over WhatsApp - the link shows a preview with the board position, players, and event.";
     document.getElementById("shareGameLink").textContent=data.url;
     document.getElementById("shareGameModal").classList.remove("hidden");
+    return true;
   }catch(err){
     alert("Couldn't create a share link right now. Please try again in a moment.");
+    return false;
   }finally{
     if(btn){ btn.disabled=false; btn.innerHTML=oldLabel; }
   }
