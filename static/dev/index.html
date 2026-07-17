@@ -2157,6 +2157,18 @@ async function loadFromRemoteLibrary(id){
     return false;
   }
 }
+function openSharedGameView(g){
+  if(window.matchMedia("(max-width:700px)").matches){
+    openGameSheet(g);
+    return;
+  }
+  const el=document.getElementById("pgnrow-"+g.idx);
+  if(el && !el.classList.contains("open")){
+    el.classList.add("open");
+    const container=el.querySelector(".chess-widget-wrap");
+    if(container) createChessWidget(container, g);
+  }
+}
 async function loadSharedGame(id){
   try{
     const res=await fetch(API_BASE+API_LIBRARIES_PATH+"/"+encodeURIComponent(id));
@@ -2166,6 +2178,8 @@ async function loadSharedGame(id){
     // saveToStorage() (via loadGames's skipPersist flag) so it doesn't overwrite
     // whatever the visitor's own browser already has saved under STORAGE_KEY.
     loadGames(data.pgn, data.playerName, true);
+    // Jump straight into the game rather than leaving the visitor on a one-row list.
+    if(games.length===1) openSharedGameView(games[0]);
     return true;
   }catch(err){
     return false;
