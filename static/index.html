@@ -987,7 +987,7 @@ function parsePGN(text){
   for(let i=0;i<parts.length;i++){
     const p=parts[i].trim(); if(!p) continue;
     const headers={}; const re=/\[(\w+)\s+"([^"]*)"\]/g; let m;
-    while((m=re.exec(p))!==null) headers[m[1]]=m[2];
+    while((m=re.exec(p))!==null) headers[m[1]]=m[2].trim();
     const movetext=p.replace(/\[\w+\s+"[^"]*"\]\s*/g,"").trim();
     blocks.push({headers,movetext});
   }
