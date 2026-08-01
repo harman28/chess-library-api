@@ -126,11 +126,13 @@ def init_db():
 
 def create_library(table):
     data = request.get_json(silent=True) or {}
+    # Empty playerName is allowed here (unlike /api/games/share): a guest saving their
+    # own fresh library from someone else's shared-game view has no name of their own
+    # yet to send, and the frontend deliberately sends "" rather than the sharer's name
+    # in that case — see loadSharedGame/isSharedGameGuest in static/index.html.
     player_name = (data.get("playerName") or "").strip()
     pgn = data.get("pgn") or ""
 
-    if not player_name:
-        return jsonify(error="playerName is required"), 400
     if not pgn.strip():
         return jsonify(error="pgn is required"), 400
     if len(pgn.encode("utf-8")) > MAX_PGN_BYTES:

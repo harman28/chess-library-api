@@ -973,6 +973,10 @@ function createChessWidget(container, g){
 }
 
 let games = []; let playerName = ""; let selected = new Set(); let activeFilters = new Set(["all"]); let selectionMode = null; let searchQuery = "";
+// True right after viewing someone else's shared single game via /g/<id> — that view
+// borrows the sharer's playerName just to render/classify the game, but it isn't the
+// visitor's own name. Cleared by any path that sets a name the visitor actually chose.
+let isSharedGameGuest = false;
 function gameMatchesSearch(g){
   if(!searchQuery) return true;
   const q=searchQuery.toLowerCase();
@@ -1193,6 +1197,7 @@ function sortGamesByDate(){
 }
 function loadGames(pgnText, name, skipPersist){
   if(!name || !name.trim()){ alert("Please enter your name"); return; }
+  isSharedGameGuest=false;
   games=[]; selected.clear(); playerName=name.trim(); activeFilters=new Set(["all"]); selectionMode=null; searchQuery=""; document.getElementById("searchInput").value=""; updateSearchClearVisibility();
   const blocks=parsePGN(pgnText);
   blocks.forEach((b,idx)=>{ games.push(buildGameRecord(b, idx+1, name)); });
@@ -1933,6 +1938,7 @@ function commitSettingsName(){
   const newName=document.getElementById("settingsNameInput").value.trim();
   if(newName && newName!==playerName){
     playerName=newName;
+    isSharedGameGuest=false;
     games.forEach(g=>{ const c=classify(g, playerName); g.color=c.color; g.outcome=c.outcome; });
     render();
     saveToStorage();
@@ -1982,13 +1988,24 @@ async function openSaveLibraryModal(btn){
   btn.disabled=true; btn.textContent="Saving…";
   try{
     const pgn=buildPgnForGames(games);
+    // A guest saving straight from someone else's shared-game view has no name of
+    // their own yet — send blank rather than the sharer's borrowed playerName, so
+    // their new library's Settings starts empty instead of claiming to be the sharer.
+    const nameToSave=isSharedGameGuest ? "" : playerName;
     const res=await fetch(API_BASE+API_LIBRARIES_PATH, {
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({playerName, pgn})
+      body:JSON.stringify({playerName:nameToSave, pgn})
     });
     if(!res.ok) throw new Error("HTTP "+res.status);
     const data=await res.json();
+    if(isSharedGameGuest){
+      // The shared-game view deliberately never persisted to this device's storage
+      // (see loadSharedGame's skipPersist) so it wouldn't clobber a visitor's own
+      // existing library. Now that they've chosen to save it as their own, start
+      // persisting locally too, same as every other "Save My Library" path already does.
+      playerName=""; isSharedGameGuest=false; saveToStorage();
+    }
     const link=location.origin+location.pathname+"?lib="+data.id;
     document.getElementById("saveLibraryLink").textContent=link;
     document.getElementById("saveLibraryModal").classList.remove("hidden");
@@ -2199,6 +2216,7 @@ async function loadSharedGame(id){
     // saveToStorage() (via loadGames's skipPersist flag) so it doesn't overwrite
     // whatever the visitor's own browser already has saved under STORAGE_KEY.
     loadGames(data.pgn, data.playerName, true);
+    isSharedGameGuest=true;
     // Jump straight into the game rather than leaving the visitor on a one-row list.
     if(games.length===1) openSharedGameView(games[0]);
     return true;
