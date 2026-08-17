@@ -558,6 +558,51 @@ function initialBoard(){
   }
   return b;
 }
+function initialBoardFromFEN(fen){
+  const placement = String(fen).trim().split(/\s+/)[0];
+  const ranks = placement.split("/");
+  if(ranks.length!==8) throw new Error("Invalid FEN placement: "+fen);
+  const typeMap = {p:"P",n:"N",b:"B",r:"R",q:"Q",k:"K"};
+  const b = Array.from({length:8},()=>Array(8).fill(null));
+  for(let i=0;i<8;i++){
+    const r = 7-i;
+    let f=0;
+    for(const ch of ranks[i]){
+      if(/[1-8]/.test(ch)){ f+=parseInt(ch,10); continue; }
+      const type = typeMap[ch.toLowerCase()];
+      if(!type || f>7) throw new Error("Invalid FEN rank: "+ranks[i]);
+      b[r][f] = {type, color: ch===ch.toUpperCase()?"w":"b"};
+      f++;
+    }
+    if(f!==8) throw new Error("Invalid FEN rank length: "+ranks[i]);
+  }
+  return b;
+}
+function findCastleFiles(board){
+  const files = {};
+  for(const color of ["w","b"]){
+    const rank = color==="w" ? 0 : 7;
+    let kingFile=null; const rookFiles=[];
+    for(let f=0; f<8; f++){
+      const p = board[rank][f];
+      if(!p || p.color!==color) continue;
+      if(p.type==="K") kingFile=f;
+      else if(p.type==="R") rookFiles.push(f);
+    }
+    const rookQ = kingFile!=null ? rookFiles.filter(f=>f<kingFile).pop() : undefined;
+    const rookK = kingFile!=null ? rookFiles.filter(f=>f>kingFile).shift() : undefined;
+    files[color] = { king: kingFile!=null?kingFile:4, rookQ: rookQ!=null?rookQ:0, rookK: rookK!=null?rookK:7 };
+  }
+  return files;
+}
+function boardFromHeaders(headers){
+  const h = headers||{};
+  const setup = h.SetUp==="1"||h.SetUp===1;
+  if(setup && h.FEN){
+    try { return initialBoardFromFEN(h.FEN); } catch(_){ /* fall through to standard start */ }
+  }
+  return initialBoard();
+}
 function cloneBoard(b){ return b.map(row=>row.map(c=>c?{...c}:null)); }
 function sqToRC(sq){ return { f: "abcdefgh".indexOf(sq[0]), r: parseInt(sq[1],10)-1 }; }
 function rcToSq(f,r){ return "abcdefgh"[f]+(r+1); }
@@ -616,21 +661,26 @@ function leavesOwnKingInCheck(board, color, from, to, promo){
 function applySanMove(board, sanRaw, color, state){
   let san = sanRaw.replace(/[+#]/g,"").replace(/[!?]+$/,"");
   const isWhite = color==="w";
+  const cf = (state.castleFiles && state.castleFiles[color]) || {king:4, rookQ:0, rookK:7};
   if(san==="O-O"||san==="0-0"){
     const rank = isWhite?0:7;
-    const king={...board[rank][4]}, rook={...board[rank][7]};
-    board[rank][6] = king; board[rank][4]=null;
-    board[rank][5] = rook; board[rank][7]=null;
+    const kingFrom=cf.king, rookFrom=cf.rookK;
+    const king={...board[rank][kingFrom]}, rook={...board[rank][rookFrom]};
+    board[rank][kingFrom]=null; board[rank][rookFrom]=null;
+    board[rank][6] = king;
+    board[rank][5] = rook;
     state.enPassant = null;
-    return { from:rcToSq(4,rank), to:rcToSq(6,rank), piece:king, isCastle:true, rookFrom:rcToSq(7,rank), rookTo:rcToSq(5,rank), promo:null, capturedSquare:null, capturedPiece:null };
+    return { from:rcToSq(kingFrom,rank), to:rcToSq(6,rank), piece:king, isCastle:true, rookFrom:rcToSq(rookFrom,rank), rookTo:rcToSq(5,rank), promo:null, capturedSquare:null, capturedPiece:null };
   }
   if(san==="O-O-O"||san==="0-0-0"){
     const rank = isWhite?0:7;
-    const king={...board[rank][4]}, rook={...board[rank][0]};
-    board[rank][2] = king; board[rank][4]=null;
-    board[rank][3] = rook; board[rank][0]=null;
+    const kingFrom=cf.king, rookFrom=cf.rookQ;
+    const king={...board[rank][kingFrom]}, rook={...board[rank][rookFrom]};
+    board[rank][kingFrom]=null; board[rank][rookFrom]=null;
+    board[rank][2] = king;
+    board[rank][3] = rook;
     state.enPassant = null;
-    return { from:rcToSq(4,rank), to:rcToSq(2,rank), piece:king, isCastle:true, rookFrom:rcToSq(0,rank), rookTo:rcToSq(3,rank), promo:null, capturedSquare:null, capturedPiece:null };
+    return { from:rcToSq(kingFrom,rank), to:rcToSq(2,rank), piece:king, isCastle:true, rookFrom:rcToSq(rookFrom,rank), rookTo:rcToSq(3,rank), promo:null, capturedSquare:null, capturedPiece:null };
   }
   let promo=null;
   const promoM = san.match(/=([QRBN])$/);
@@ -704,10 +754,10 @@ function applySanMove(board, sanRaw, color, state){
     promo: promo, capturedSquare, capturedPiece,
   };
 }
-function computeBoardStates(sanMoves){
+function computeBoardStates(sanMoves, headers){
   const states=[];
-  let board = initialBoard();
-  const engineState = { enPassant:null };
+  let board = boardFromHeaders(headers);
+  const engineState = { enPassant:null, castleFiles: findCastleFiles(board) };
   states.push({ board:cloneBoard(board), lastMove:null, sanRaw:null });
   for(let i=0;i<sanMoves.length;i++){
     const color = i%2===0?"w":"b";
@@ -777,7 +827,7 @@ function createChessWidget(container, g){
   const sanMoves = extractMainlineSan(g.movetext);
   let states;
   try{
-    states = computeBoardStates(sanMoves);
+    states = computeBoardStates(sanMoves, g.headers);
   } catch(err){
     container.innerHTML = `<div class="cw-error">Couldn’t render this game’s moves.</div>`;
     return { goToPly:()=>{}, refreshHighlight:()=>{} };
