@@ -1208,11 +1208,16 @@ function formatMovesWithComments(movetext, gameIdx){
 const CORE_TAG_ORDER=['Event','Site','Date','Round','White','Black','Result'];
 function buildGameRecord(b, idx, name){
   const c=classify(b, name);
-  const h=b.headers||{};
+  // A FEN header is only meaningful to a spec-compliant PGN reader (including this app's
+  // own backend, via python-chess) when paired with [SetUp "1"] - some PGN sources (e.g.
+  // this Chess960 tournament software's export) write FEN without it. Normalize once here
+  // so every consumer of g.headers/g.pgn downstream sees a compliant, consistent pair.
+  const h={...(b.headers||{})};
+  if(h.FEN && h.SetUp!=="1") h.SetUp="1";
   const headerLines=CORE_TAG_ORDER.map(t=>"["+t+" \""+(h[t]||"")+"\"]")
     .concat(Object.keys(h).filter(t=>!CORE_TAG_ORDER.includes(t)).map(t=>"["+t+" \""+(h[t]||"")+"\"]"));
   const pgn=b.movetext ? (headerLines.join("\n")+"\n"+b.movetext) : "";
-  return { idx, headers:{...b.headers}, movetext:b.movetext, moves:countMoves(b.movetext), pgn, color:c.color, outcome:c.outcome, speed:classifySpeed(b.headers.TimeControl) };
+  return { idx, headers:h, movetext:b.movetext, moves:countMoves(b.movetext), pgn, color:c.color, outcome:c.outcome, speed:classifySpeed(b.headers.TimeControl) };
 }
 function dateSortKey(dateStr){
   if(!dateStr) return -Infinity;
