@@ -1206,9 +1206,13 @@ function formatMovesWithComments(movetext, gameIdx){
   });
   return out;
 }
+const CORE_TAG_ORDER=['Event','Site','Date','Round','White','Black','Result'];
 function buildGameRecord(b, idx, name){
   const c=classify(b, name);
-  const pgn=b.movetext ? ("[Event \""+(b.headers.Event||"")+"\"]\n[Site \""+(b.headers.Site||"")+"\"]\n[Date \""+(b.headers.Date||"")+"\"]\n[Round \""+(b.headers.Round||"")+"\"]\n[White \""+(b.headers.White||"")+"\"]\n[Black \""+(b.headers.Black||"")+"\"]\n[Result \""+(b.headers.Result||"")+"\"]\n"+b.movetext) : "";
+  const h=b.headers||{};
+  const headerLines=CORE_TAG_ORDER.map(t=>"["+t+" \""+(h[t]||"")+"\"]")
+    .concat(Object.keys(h).filter(t=>!CORE_TAG_ORDER.includes(t)).map(t=>"["+t+" \""+(h[t]||"")+"\"]"));
+  const pgn=b.movetext ? (headerLines.join("\n")+"\n"+b.movetext) : "";
   return { idx, headers:{...b.headers}, movetext:b.movetext, moves:countMoves(b.movetext), pgn, color:c.color, outcome:c.outcome, speed:classifySpeed(b.headers.TimeControl) };
 }
 function dateSortKey(dateStr){
@@ -1803,12 +1807,11 @@ function exitSelectionMode(){
   updateSelCount();
   updateToolbarHeightVar();
 }
-const EXPORT_TAG_ORDER=['Event','Site','Date','Round','White','Black','Result'];
 function buildPgnForGames(list){ if(!list.length) return "";
   return list.map(g=>{ const h=g.headers||{};
-    const lines=EXPORT_TAG_ORDER.map(t=>"["+t+" \""+esc(h[t]||"")+"\"]");
-    Object.keys(h).forEach(t=>{ if(!EXPORT_TAG_ORDER.includes(t)) lines.push("["+t+" \""+esc(h[t])+"\"]"); });
-    return lines.join("\n")+"\n\n"+g.pgn.split("\n").slice(7).join("\n").trim(); }).join("\n\n")+"\n"; }
+    const lines=CORE_TAG_ORDER.map(t=>"["+t+" \""+esc(h[t]||"")+"\"]");
+    Object.keys(h).forEach(t=>{ if(!CORE_TAG_ORDER.includes(t)) lines.push("["+t+" \""+esc(h[t])+"\"]"); });
+    return lines.join("\n")+"\n\n"+(g.movetext||"").trim(); }).join("\n\n")+"\n"; }
 function buildExport(){ const chosen=selected.size>0?games.filter(g=>selected.has(g.idx)):games; return buildPgnForGames(chosen); }
 function downloadBlob(text, filename){ const blob=new Blob([text],{type:"application/x-chess-pgn"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=filename; a.click(); URL.revokeObjectURL(url); }
 document.getElementById("enterSelectionBtn").addEventListener("click",()=>{
