@@ -597,8 +597,7 @@ function findCastleFiles(board){
 }
 function boardFromHeaders(headers){
   const h = headers||{};
-  const setup = h.SetUp==="1"||h.SetUp===1;
-  if(setup && h.FEN){
+  if(h.FEN){
     try { return initialBoardFromFEN(h.FEN); } catch(_){ /* fall through to standard start */ }
   }
   return initialBoard();
