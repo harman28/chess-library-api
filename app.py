@@ -17,6 +17,7 @@ MAX_PGN_BYTES = 5 * 1024 * 1024  # 5MB, generous headroom over real collections
 SHARE_MAX_PGN_BYTES = 512 * 1024  # comfortable headroom for SHARE_MAX_GAMES games, well short of the whole-library cap
 SHARE_MAX_GAMES = 25  # keeps "share a selection" meaningfully distinct from "share my whole library"
 SHARE_RATE_LIMIT_PER_DAY = 50  # per-IP; blast radius here is just a DB row, same as the existing anonymous save endpoint
+FORGOT_PASSWORD_RATE_LIMIT_PER_DAY = 5  # per-IP; much lower than the share limit above since the blast radius of abuse here is mail-bombing a real inbox, not just extra DB rows
 ID_BYTES = 18  # secrets.token_urlsafe(18) -> 24 url-safe chars, ~144 bits of entropy
 SESSION_TOKEN_BYTES = 32  # secrets.token_urlsafe(32) -> ~43 url-safe chars, ~256 bits
 RESET_TOKEN_BYTES = 32  # secrets.token_urlsafe(32) -> ~43 url-safe chars, ~256 bits
@@ -142,6 +143,18 @@ def init_db():
                 """
             )
             cur.execute("CREATE INDEX IF NOT EXISTS share_events_ip_created_idx ON share_events (ip, created_at)")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS password_reset_events (
+                    id SERIAL PRIMARY KEY,
+                    ip TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS password_reset_events_ip_created_idx ON password_reset_events (ip, created_at)"
+            )
         conn.commit()
     finally:
         put_conn(conn)
@@ -724,12 +737,25 @@ def forgot_password(env):
     if not username:
         return jsonify(message=FORGOT_PASSWORD_MESSAGE), 200
 
+    ip = client_ip()
     users_table = USERS_TABLES[env]
     resets_table = PASSWORD_RESETS_TABLES[env]
 
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            # Counted per-IP regardless of whether the username below turns out to
+            # exist, so this can't be bypassed by trying many different usernames from
+            # one IP - the point is capping how many emails one IP can trigger, not how
+            # many *valid* requests it can make.
+            cur.execute(
+                "SELECT COUNT(*) FROM password_reset_events WHERE ip = %s AND created_at > now() - interval '1 day'",
+                (ip,),
+            )
+            if cur.fetchone()[0] >= FORGOT_PASSWORD_RATE_LIMIT_PER_DAY:
+                return jsonify(error="Too many reset requests from this network today. Please try again tomorrow."), 429
+            cur.execute("INSERT INTO password_reset_events (ip) VALUES (%s)", (ip,))
+
             cur.execute(
                 f"SELECT id, username, email FROM {users_table} WHERE LOWER(username) = LOWER(%s)",
                 (username,),

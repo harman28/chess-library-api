@@ -209,13 +209,13 @@ if a share link "doesn't work" for someone before the DNS/custom-domain step (se
   file** — it always returns the same 200 message. Don't "improve" this by returning a
   different message/status for "no such user" vs "no email on file"; that reintroduces
   the enumeration hole it's specifically designed to close.
-- **No rate limiting on `/api/auth/forgot-password` yet** — unlike `/api/games/share`
-  (which has a per-IP daily cap backed by `share_events`), a bad actor could currently
-  mail-bomb an account's inbox by repeatedly requesting resets for its username. Left
-  unaddressed for now given this project's low-stakes, personal-use scale (same posture
-  as the share endpoint's already-accepted "blast radius is just DB rows" reasoning) —
-  worth revisiting with the same `share_events`-style per-IP counter if this ever
-  actually gets abused.
+- **`/api/auth/forgot-password` is rate limited**, same pattern as `/api/games/share`
+  but its own table (`password_reset_events`, not env-suffixed - an abuse counter, not
+  user data, same reasoning as `share_events`) and a much lower cap
+  (`FORGOT_PASSWORD_RATE_LIMIT_PER_DAY` = 5/IP/day vs share's 50) — the blast radius of
+  abuse here is mail-bombing a real inbox, not just extra DB rows. A row is inserted for
+  *every* request that reaches the check, before the username lookup, so it can't be
+  bypassed by trying many different usernames from one IP.
 
 ## Schema
 
@@ -249,6 +249,8 @@ if a share link "doesn't work" for someone before the DNS/custom-domain step (se
   now())`, an append-only log used only to compute a per-IP rolling-24h count for the
   share endpoint's rate limit. Not env-suffixed (shared across prod/dev) — it's an abuse
   counter, not user data, doesn't need environment isolation.
+- `password_reset_events` — same shape and same rationale as `share_events` above, just
+  for `/api/auth/forgot-password`'s own (much lower) rate limit.
 
 ## Prod/dev split
 
