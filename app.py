@@ -537,14 +537,39 @@ def send_email(to_addr, subject, body):
         return
     try:
         import smtplib
+        import socket
         from email.message import EmailMessage
+
+        class _IPv4SMTP(smtplib.SMTP):
+            # Railway containers have no outbound IPv6 route (ipv6EgressEnabled=false
+            # on the service). smtplib's default socket setup tries every address
+            # getaddrinfo() returns for the host, IPv6 (AAAA) included - Gmail
+            # publishes both, and the IPv6 attempt fails with ENETUNREACH before ever
+            # reaching the working IPv4 path, so the connection dies outright instead
+            # of falling back. Forcing AF_INET here is the fix; the hostname passed to
+            # SMTP() itself is untouched, so starttls()'s TLS hostname/cert check
+            # (which uses that original hostname, not the resolved IP) still matches.
+            def _get_socket(self, host, port, timeout):
+                addr_info = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+                last_err = None
+                for family, socktype, proto, _, sockaddr in addr_info:
+                    sock = socket.socket(family, socktype, proto)
+                    try:
+                        if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                            sock.settimeout(timeout)
+                        sock.connect(sockaddr)
+                        return sock
+                    except OSError as exc:
+                        sock.close()
+                        last_err = exc
+                raise last_err
 
         msg = EmailMessage()
         msg["Subject"] = subject
         msg["From"] = SMTP_FROM or SMTP_USER
         msg["To"] = to_addr
         msg.set_content(body)
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
+        with _IPv4SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
             smtp.starttls()
             if SMTP_USER:
                 smtp.login(SMTP_USER, SMTP_PASSWORD)
