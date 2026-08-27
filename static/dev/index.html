@@ -228,6 +228,15 @@ button.copy-btn{background:var(--surface-alt);color:var(--text);border:1px solid
 .auth-divider{display:flex;align-items:center;gap:.6rem;color:var(--text-faint);font-size:.78rem;text-transform:uppercase;letter-spacing:.04em}
 .auth-divider::before,.auth-divider::after{content:"";flex:1;height:1px;background:var(--border)}
 #googleSignInBtn{display:flex;justify-content:center}
+.auth-forgot-row{text-align:right;margin-top:-.5rem}
+.account-email-row{display:flex;flex-direction:column;gap:.35rem}
+.account-email-row label{color:var(--text-dim);font-size:.78rem;font-weight:500}
+.account-email-input-row{display:flex;gap:.4rem}
+.account-email-row input[type="email"]{flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:.4rem;padding:.45rem .6rem;font-size:.82rem;outline:none;box-sizing:border-box;min-width:0}
+.account-email-row input[type="email"]:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(56,189,248,.15)}
+.account-email-row button{background:var(--surface-alt);color:var(--text);border:1px solid var(--border);border-radius:.4rem;padding:.45rem .7rem;font-size:.8rem;cursor:pointer;white-space:nowrap;font-family:inherit}
+.account-email-row button:hover{border-color:var(--border-hover)}
+.account-email-hint{color:var(--text-faint);font-size:.72rem;line-height:1.35;margin:0}
 
 /* ---------- mobile card list + bottom sheet ---------- */
 .mobile-only{display:none}
@@ -306,6 +315,14 @@ body.sheet-open .game-sheet{transform:translateY(0)}
   <div id="accountPanel" class="hidden">
     <div class="columns-panel-header">Account</div>
     <div id="accountPanelUsername" class="account-panel-username"></div>
+    <div class="account-email-row">
+      <label for="accountEmailInput">Recovery email</label>
+      <p class="account-email-hint">Used for password reset links. Not shown to anyone else.</p>
+      <div class="account-email-input-row">
+        <input type="email" id="accountEmailInput" autocomplete="email" placeholder="you@example.com">
+        <button id="accountEmailSaveBtn" type="button">Save</button>
+      </div>
+    </div>
     <button id="logoutBtn" type="button" class="account-logout-row">Log Out</button>
   </div>
 </div>
@@ -467,8 +484,13 @@ body.sheet-open .game-sheet{transform:translateY(0)}
     <div id="authError" class="auth-error hidden"></div>
     <label>Username</label>
     <input type="text" id="authUsername" autocomplete="username" spellcheck="false">
+    <label id="authEmailLabel" class="hidden">Email <span class="account-email-hint">(optional, lets you reset your password later)</span></label>
+    <input type="email" id="authEmail" class="hidden" autocomplete="email" placeholder="you@example.com">
     <label>Password</label>
     <input type="password" id="authPassword" autocomplete="current-password">
+    <div id="authForgotRow" class="auth-forgot-row">
+      <button id="authForgotBtn" type="button" class="link-btn">Forgot password?</button>
+    </div>
     <div class="modal-actions">
       <button id="authCancelBtn" type="button">Cancel</button>
       <button id="authSubmitBtn" type="button" class="primary">Log In</button>
@@ -479,6 +501,32 @@ body.sheet-open .game-sheet{transform:translateY(0)}
     <div id="authGoogleWrap" class="auth-google-wrap hidden">
       <div class="auth-divider"><span>or</span></div>
       <div id="googleSignInBtn"></div>
+    </div>
+  </div>
+</div>
+<div id="forgotPasswordModal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h2>Forgot Password</h2>
+    <p class="save-link-note">Enter your username. If your account has an email on file, we'll send a reset link.</p>
+    <div id="forgotError" class="auth-error hidden"></div>
+    <div id="forgotSent" class="save-link-note hidden">Check your email for a reset link. It's valid for 60 minutes.</div>
+    <label>Username</label>
+    <input type="text" id="forgotUsername" autocomplete="username" spellcheck="false">
+    <div class="modal-actions">
+      <button id="forgotCancelBtn" type="button">Cancel</button>
+      <button id="forgotSubmitBtn" type="button" class="primary">Send Reset Link</button>
+    </div>
+  </div>
+</div>
+<div id="resetPasswordModal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h2>Set New Password</h2>
+    <div id="resetError" class="auth-error hidden"></div>
+    <label>New Password</label>
+    <input type="password" id="resetPassword" autocomplete="new-password">
+    <div class="modal-actions">
+      <button id="resetCancelBtn" type="button">Cancel</button>
+      <button id="resetSubmitBtn" type="button" class="primary">Set Password</button>
     </div>
   </div>
 </div>
@@ -2022,11 +2070,12 @@ const API_AUTH_PATH=IS_DEV?"/api/dev/auth":"/api/auth";
 const API_LIBRARY_MINE_PATH=IS_DEV?"/api/dev/library/mine":"/api/library/mine";
 const API_GAME_SHARE_PATH=IS_DEV?"/api/dev/games/share":"/api/games/share";
 const AUTH_TOKEN_KEY="chessLibraryAuthToken"+(IS_DEV?"_dev":"");
-let authToken=null; let authUsername=null; let authMode="login"; let authSyncTimer=null;
+let authToken=null; let authUsername=null; let authEmail=""; let authMode="login"; let authSyncTimer=null;
 function updateAccountUI(){
   document.getElementById("accountBtnLabel").textContent=
     authUsername ? authUsername : (games.length ? "Save My Library" : "Log In");
   document.getElementById("accountPanelUsername").textContent=authUsername?("Signed in as "+authUsername):"";
+  document.getElementById("accountEmailInput").value=authEmail;
 }
 document.getElementById("accountBtn").addEventListener("click", async (e)=>{
   e.stopPropagation();
@@ -2130,7 +2179,7 @@ document.addEventListener("click",(e)=>{
 document.getElementById("logoutBtn").addEventListener("click", async ()=>{
   document.getElementById("accountPanel").classList.add("hidden");
   const oldToken=authToken;
-  authToken=null; authUsername=null;
+  authToken=null; authUsername=null; authEmail="";
   localStorage.removeItem(AUTH_TOKEN_KEY);
   resetToUpload();
   if(oldToken){
@@ -2144,10 +2193,14 @@ function updateAuthModalMode(){
   document.getElementById("authPassword").autocomplete=isLogin?"current-password":"new-password";
   document.getElementById("authSwitchText").textContent=isLogin?"Don't have an account?":"Already have an account?";
   document.getElementById("authSwitchBtn").textContent=isLogin?"Sign Up":"Log In";
+  document.getElementById("authEmailLabel").classList.toggle("hidden", isLogin);
+  document.getElementById("authEmail").classList.toggle("hidden", isLogin);
+  document.getElementById("authForgotRow").classList.toggle("hidden", !isLogin);
 }
 function openAuthModal(mode){
   authMode=mode;
   document.getElementById("authUsername").value="";
+  document.getElementById("authEmail").value="";
   document.getElementById("authPassword").value="";
   document.getElementById("authError").classList.add("hidden");
   updateAuthModalMode();
@@ -2168,6 +2221,7 @@ function showAuthError(msg){
 }
 async function submitAuthForm(){
   const username=document.getElementById("authUsername").value.trim();
+  const email=document.getElementById("authEmail").value.trim();
   const password=document.getElementById("authPassword").value;
   if(!username || !password){ showAuthError("Enter a username and password."); return; }
   const btn=document.getElementById("authSubmitBtn");
@@ -2175,17 +2229,18 @@ async function submitAuthForm(){
   btn.disabled=true; btn.textContent="Please wait…";
   try{
     const endpoint=authMode==="login"?"/login":"/signup";
+    const body=authMode==="login" ? {username, password} : {username, password, email};
     const res=await fetch(API_BASE+API_AUTH_PATH+endpoint, {
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({username, password})
+      body:JSON.stringify(body)
     });
     const data=await res.json().catch(()=>({}));
     if(!res.ok){
       showAuthError(data.error || (authMode==="login"?"Incorrect username or password.":"Couldn't create that account."));
       return;
     }
-    authToken=data.token; authUsername=data.username;
+    authToken=data.token; authUsername=data.username; authEmail=authMode==="signup"?email:"";
     localStorage.setItem(AUTH_TOKEN_KEY, authToken);
     closeAuthModal();
     updateAccountUI();
@@ -2193,6 +2248,7 @@ async function submitAuthForm(){
       if(games.length) await syncLibraryToAccount();
     } else {
       await pullLibraryFromAccount();
+      checkAuthOnLoad();
     }
   }catch(err){
     showAuthError("Something went wrong. Please try again.");
@@ -2203,6 +2259,88 @@ async function submitAuthForm(){
 document.getElementById("authSubmitBtn").addEventListener("click", submitAuthForm);
 document.getElementById("authPassword").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); submitAuthForm(); } });
 document.getElementById("authUsername").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); document.getElementById("authPassword").focus(); } });
+function openForgotPasswordModal(){
+  closeAuthModal();
+  document.getElementById("forgotUsername").value=document.getElementById("authUsername").value.trim();
+  document.getElementById("forgotError").classList.add("hidden");
+  document.getElementById("forgotSent").classList.add("hidden");
+  document.getElementById("forgotUsername").classList.remove("hidden");
+  document.getElementById("forgotUsername").previousElementSibling.classList.remove("hidden");
+  document.getElementById("forgotSubmitBtn").classList.remove("hidden");
+  document.getElementById("forgotPasswordModal").classList.remove("hidden");
+  document.getElementById("forgotUsername").focus();
+}
+function closeForgotPasswordModal(){ document.getElementById("forgotPasswordModal").classList.add("hidden"); }
+document.getElementById("authForgotBtn").addEventListener("click", openForgotPasswordModal);
+document.getElementById("forgotCancelBtn").addEventListener("click", closeForgotPasswordModal);
+document.getElementById("forgotPasswordModal").addEventListener("click",(e)=>{ if(e.target.id==="forgotPasswordModal") closeForgotPasswordModal(); });
+document.getElementById("forgotSubmitBtn").addEventListener("click", async ()=>{
+  const username=document.getElementById("forgotUsername").value.trim();
+  const errEl=document.getElementById("forgotError");
+  errEl.classList.add("hidden");
+  if(!username){ errEl.textContent="Enter your username."; errEl.classList.remove("hidden"); return; }
+  const btn=document.getElementById("forgotSubmitBtn");
+  const oldLabel=btn.textContent;
+  btn.disabled=true; btn.textContent="Sending…";
+  try{
+    const res=await fetch(API_BASE+API_AUTH_PATH+"/forgot-password", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({username})
+    });
+    await res.json().catch(()=>({}));
+    // Always show the same generic confirmation regardless of res.ok/account existence -
+    // the backend deliberately never reveals whether a username has an email on file.
+    document.getElementById("forgotUsername").classList.add("hidden");
+    document.getElementById("forgotUsername").previousElementSibling.classList.add("hidden");
+    btn.classList.add("hidden");
+    document.getElementById("forgotSent").classList.remove("hidden");
+  }catch(err){
+    errEl.textContent="Something went wrong. Please try again.";
+    errEl.classList.remove("hidden");
+  }finally{
+    btn.disabled=false; btn.textContent=oldLabel;
+  }
+});
+let pendingResetToken=null;
+function openResetPasswordModal(){
+  document.getElementById("resetPassword").value="";
+  document.getElementById("resetError").classList.add("hidden");
+  document.getElementById("resetPasswordModal").classList.remove("hidden");
+  document.getElementById("resetPassword").focus();
+}
+function closeResetPasswordModal(){ document.getElementById("resetPasswordModal").classList.add("hidden"); pendingResetToken=null; }
+document.getElementById("resetCancelBtn").addEventListener("click", closeResetPasswordModal);
+document.getElementById("resetPasswordModal").addEventListener("click",(e)=>{ if(e.target.id==="resetPasswordModal") closeResetPasswordModal(); });
+document.getElementById("resetSubmitBtn").addEventListener("click", async ()=>{
+  const password=document.getElementById("resetPassword").value;
+  const errEl=document.getElementById("resetError");
+  errEl.classList.add("hidden");
+  if(password.length<8){ errEl.textContent="Password must be at least 8 characters."; errEl.classList.remove("hidden"); return; }
+  const btn=document.getElementById("resetSubmitBtn");
+  const oldLabel=btn.textContent;
+  btn.disabled=true; btn.textContent="Please wait…";
+  try{
+    const res=await fetch(API_BASE+API_AUTH_PATH+"/reset-password", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token:pendingResetToken, password})
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok){
+      errEl.textContent=data.error || "This reset link is invalid or has expired.";
+      errEl.classList.remove("hidden");
+      return;
+    }
+    closeResetPasswordModal();
+    openAuthModal("login");
+  }catch(err){
+    errEl.textContent="Something went wrong. Please try again.";
+    errEl.classList.remove("hidden");
+  }finally{
+    btn.disabled=false; btn.textContent=oldLabel;
+  }
+});
 async function pullLibraryFromAccount(){
   try{
     const res=await fetch(API_BASE+API_LIBRARY_MINE_PATH, {headers:{"Authorization":"Bearer "+authToken}});
@@ -2235,10 +2373,82 @@ async function checkAuthOnLoad(){
     const res=await fetch(API_BASE+API_AUTH_PATH+"/me", {headers:{"Authorization":"Bearer "+stored}});
     if(!res.ok){ localStorage.removeItem(AUTH_TOKEN_KEY); return false; }
     const data=await res.json();
-    authToken=stored; authUsername=data.username;
+    authToken=stored; authUsername=data.username; authEmail=data.email||"";
     updateAccountUI();
     return true;
   }catch(_){ return false; }
+}
+document.getElementById("accountEmailSaveBtn").addEventListener("click", async ()=>{
+  if(!authToken) return;
+  const email=document.getElementById("accountEmailInput").value.trim();
+  const btn=document.getElementById("accountEmailSaveBtn");
+  const oldLabel=btn.textContent;
+  btn.disabled=true; btn.textContent="Saving…";
+  try{
+    const res=await fetch(API_BASE+API_AUTH_PATH+"/email", {
+      method:"PUT",
+      headers:{"Content-Type":"application/json","Authorization":"Bearer "+authToken},
+      body:JSON.stringify({email})
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok){ alert(data.error||"Couldn't save that email right now."); return; }
+    authEmail=data.email||"";
+    btn.textContent="Saved";
+    setTimeout(()=>{ btn.textContent=oldLabel; }, 1200);
+  }catch(err){
+    alert("Couldn't save that email right now.");
+  }finally{
+    btn.disabled=false;
+    if(btn.textContent==="Saving…") btn.textContent=oldLabel;
+  }
+});
+const GSI_SCRIPT_SRC="https://accounts.google.com/gsi/client";
+let googleSignInReady=false;
+async function initGoogleSignIn(){
+  try{
+    const res=await fetch(API_BASE+"/api/config");
+    if(!res.ok) return;
+    const data=await res.json();
+    if(!data.googleClientId) return;
+    await new Promise((resolve, reject)=>{
+      const script=document.createElement("script");
+      script.src=GSI_SCRIPT_SRC;
+      script.async=true;
+      script.onload=resolve;
+      script.onerror=reject;
+      document.head.appendChild(script);
+    });
+    window.google.accounts.id.initialize({
+      client_id:data.googleClientId,
+      callback:handleGoogleCredential
+    });
+    window.google.accounts.id.renderButton(document.getElementById("googleSignInBtn"), {theme:"outline", size:"large", width:280});
+    document.getElementById("authGoogleWrap").classList.remove("hidden");
+    googleSignInReady=true;
+  }catch(_){
+    // Google sign-in just stays hidden if the script fails to load (offline, blocked, etc.) -
+    // username/password login is unaffected.
+  }
+}
+async function handleGoogleCredential(response){
+  try{
+    const res=await fetch(API_BASE+API_AUTH_PATH+"/google", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({credential:response.credential})
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok){ showAuthError(data.error||"Google sign-in failed."); return; }
+    authToken=data.token; authUsername=data.username;
+    localStorage.setItem(AUTH_TOKEN_KEY, authToken);
+    closeAuthModal();
+    updateAccountUI();
+    if(games.length) await syncLibraryToAccount();
+    await pullLibraryFromAccount();
+    checkAuthOnLoad();
+  }catch(err){
+    showAuthError("Google sign-in failed. Please try again.");
+  }
 }
 async function loadFromRemoteLibrary(id){
   try{
@@ -2331,6 +2541,13 @@ function restoreFromStorage(){
   }catch(_){}
 }
 (async function init(){
+  initGoogleSignIn();
+  const resetToken=new URLSearchParams(location.search).get("resetToken");
+  if(resetToken){
+    pendingResetToken=resetToken;
+    history.replaceState(null, "", location.origin+location.pathname);
+    openResetPasswordModal();
+  }
   const sharedMatch=location.pathname.match(/^\/(?:dev\/)?g\/([^/]+)\/?$/);
   if(sharedMatch){
     const ok=await loadSharedGame(sharedMatch[1]);

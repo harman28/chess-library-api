@@ -19,7 +19,10 @@ SHARE_MAX_GAMES = 25  # keeps "share a selection" meaningfully distinct from "sh
 SHARE_RATE_LIMIT_PER_DAY = 50  # per-IP; blast radius here is just a DB row, same as the existing anonymous save endpoint
 ID_BYTES = 18  # secrets.token_urlsafe(18) -> 24 url-safe chars, ~144 bits of entropy
 SESSION_TOKEN_BYTES = 32  # secrets.token_urlsafe(32) -> ~43 url-safe chars, ~256 bits
+RESET_TOKEN_BYTES = 32  # secrets.token_urlsafe(32) -> ~43 url-safe chars, ~256 bits
+RESET_TOKEN_TTL_MINUTES = 60
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{3,32}$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD_LEN = 8
 MAX_PASSWORD_LEN = 128
 SHARE_HOST = "https://library.chessscenes.com"
@@ -39,6 +42,16 @@ pool = psycopg2.pool.SimpleConnectionPool(1, 10, DATABASE_URL)
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 
+# SMTP is optional, same graceful-degradation pattern as GOOGLE_CLIENT_ID above: until
+# these are set on Railway, forgot-password still works end-to-end (token generated,
+# stored, single-use, expires) but the email is logged instead of sent, so the feature
+# is fully testable before real credentials exist.
+SMTP_HOST = os.environ.get("SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_FROM = os.environ.get("SMTP_FROM", "")
+
 
 def get_conn():
     return pool.getconn()
@@ -51,6 +64,7 @@ def put_conn(conn):
 LIBRARIES_TABLES = {"prod": "libraries", "dev": "libraries_dev"}
 USERS_TABLES = {"prod": "users", "dev": "users_dev"}
 SESSIONS_TABLES = {"prod": "sessions", "dev": "sessions_dev"}
+PASSWORD_RESETS_TABLES = {"prod": "password_resets", "dev": "password_resets_dev"}
 
 
 def init_db():
@@ -106,6 +120,18 @@ def init_db():
                 cur.execute(
                     f"CREATE UNIQUE INDEX IF NOT EXISTS {libraries_table}_user_id_unique ON {libraries_table} (user_id)"
                 )
+                resets_table = PASSWORD_RESETS_TABLES[env]
+                cur.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {resets_table} (
+                        token TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL REFERENCES {users_table}(id) ON DELETE CASCADE,
+                        expires_at TIMESTAMPTZ NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+                cur.execute(f"CREATE INDEX IF NOT EXISTS {resets_table}_user_id_idx ON {resets_table} (user_id)")
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS share_events (
@@ -487,10 +513,38 @@ def create_session(sessions_table, user_id):
         put_conn(conn)
 
 
+def send_email(to_addr, subject, body):
+    """Best-effort email send. Logs instead of sending when SMTP isn't configured yet
+    (mirrors GOOGLE_CLIENT_ID's graceful degradation) so forgot-password is fully
+    testable before real SMTP credentials exist. Never raises - a delivery failure here
+    must not surface as a 500 to the caller, since forgot-password always returns 200
+    regardless of whether the email actually goes out."""
+    if not SMTP_HOST:
+        print(f"[email not configured] would send to {to_addr!r}: {subject!r}\n{body}")
+        return
+    try:
+        import smtplib
+        from email.message import EmailMessage
+
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = SMTP_FROM or SMTP_USER
+        msg["To"] = to_addr
+        msg.set_content(body)
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
+            smtp.starttls()
+            if SMTP_USER:
+                smtp.login(SMTP_USER, SMTP_PASSWORD)
+            smtp.send_message(msg)
+    except Exception as exc:
+        print(f"[email send failed] to {to_addr!r}: {exc}")
+
+
 def signup(env):
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
+    email = (data.get("email") or "").strip()
 
     if not USERNAME_RE.match(username):
         return jsonify(error="Username must be 3-32 characters (letters, numbers, underscore, period, hyphen)"), 400
@@ -498,6 +552,8 @@ def signup(env):
         return jsonify(error=f"Password must be at least {MIN_PASSWORD_LEN} characters"), 400
     if len(password) > MAX_PASSWORD_LEN:
         return jsonify(error="Password is too long"), 400
+    if email and not EMAIL_RE.match(email):
+        return jsonify(error="That email address doesn't look valid"), 400
 
     users_table = USERS_TABLES[env]
     sessions_table = SESSIONS_TABLES[env]
@@ -514,8 +570,8 @@ def signup(env):
             if cur.fetchone():
                 return jsonify(error="That username is already taken"), 409
             cur.execute(
-                f"INSERT INTO {users_table} (id, username, password_hash) VALUES (%s, %s, %s)",
-                (user_id, username, password_hash),
+                f"INSERT INTO {users_table} (id, username, password_hash, email) VALUES (%s, %s, %s, %s)",
+                (user_id, username, password_hash, email or None),
             )
         conn.commit()
     finally:
@@ -571,7 +627,35 @@ def me(env):
     user = get_user_from_request(env)
     if not user:
         return jsonify(error="not authenticated"), 401
-    return jsonify(username=user["username"])
+    users_table = USERS_TABLES[env]
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT email FROM {users_table} WHERE id = %s", (user["id"],))
+            row = cur.fetchone()
+    finally:
+        put_conn(conn)
+    return jsonify(username=user["username"], email=(row[0] if row else None) or "")
+
+
+def update_email(env):
+    user = get_user_from_request(env)
+    if not user:
+        return jsonify(error="not authenticated"), 401
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip()
+    if email and not EMAIL_RE.match(email):
+        return jsonify(error="That email address doesn't look valid"), 400
+
+    users_table = USERS_TABLES[env]
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE {users_table} SET email = %s WHERE id = %s", (email or None, user["id"]))
+        conn.commit()
+    finally:
+        put_conn(conn)
+    return jsonify(email=email)
 
 
 def google_login(env):
@@ -627,6 +711,100 @@ def google_login(env):
 
     token = create_session(sessions_table, user_id)
     return jsonify(token=token, username=username), 200
+
+
+# Generic message returned regardless of whether the account/email actually exists, so
+# this endpoint can't be used to enumerate registered usernames.
+FORGOT_PASSWORD_MESSAGE = "If that account has an email on file, a reset link is on its way."
+
+
+def forgot_password(env):
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    if not username:
+        return jsonify(message=FORGOT_PASSWORD_MESSAGE), 200
+
+    users_table = USERS_TABLES[env]
+    resets_table = PASSWORD_RESETS_TABLES[env]
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT id, username, email FROM {users_table} WHERE LOWER(username) = LOWER(%s)",
+                (username,),
+            )
+            row = cur.fetchone()
+            if row and row[2]:
+                user_id, real_username, email = row
+                token = secrets.token_urlsafe(RESET_TOKEN_BYTES)
+                # One live reset link per account at a time - requesting a new one
+                # invalidates any earlier, still-unused link.
+                cur.execute(f"DELETE FROM {resets_table} WHERE user_id = %s", (user_id,))
+                cur.execute(
+                    f"INSERT INTO {resets_table} (token, user_id, expires_at) "
+                    f"VALUES (%s, %s, now() + interval '{RESET_TOKEN_TTL_MINUTES} minutes')",
+                    (token, user_id),
+                )
+        conn.commit()
+    finally:
+        put_conn(conn)
+
+    if row and row[2]:
+        prefix = "/dev/" if env == "dev" else "/"
+        reset_link = f"{SHARE_HOST}{prefix}?resetToken={token}"
+        send_email(
+            email,
+            "Reset your Chess Library password",
+            f"Hi {real_username},\n\n"
+            f"Someone (hopefully you) asked to reset the password for your Chess Library "
+            f"account. This link is valid for {RESET_TOKEN_TTL_MINUTES} minutes:\n\n"
+            f"{reset_link}\n\n"
+            f"If you didn't request this, you can ignore this email - your password won't change.",
+        )
+
+    return jsonify(message=FORGOT_PASSWORD_MESSAGE), 200
+
+
+def reset_password(env):
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    password = data.get("password") or ""
+
+    if not token:
+        return jsonify(error="Missing reset token"), 400
+    if len(password) < MIN_PASSWORD_LEN:
+        return jsonify(error=f"Password must be at least {MIN_PASSWORD_LEN} characters"), 400
+    if len(password) > MAX_PASSWORD_LEN:
+        return jsonify(error="Password is too long"), 400
+
+    users_table = USERS_TABLES[env]
+    sessions_table = SESSIONS_TABLES[env]
+    resets_table = PASSWORD_RESETS_TABLES[env]
+    password_hash = generate_password_hash(password, method="pbkdf2:sha256")
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT user_id FROM {resets_table} WHERE token = %s AND expires_at > now()",
+                (token,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return jsonify(error="This reset link is invalid or has expired"), 400
+            user_id = row[0]
+            cur.execute(f"UPDATE {users_table} SET password_hash = %s WHERE id = %s", (password_hash, user_id))
+            cur.execute(f"DELETE FROM {resets_table} WHERE user_id = %s", (user_id,))
+            # Resetting a password logs every session out, same rationale as most
+            # account systems: a stolen/guessed old session shouldn't survive a reset
+            # triggered because the password may have been compromised.
+            cur.execute(f"DELETE FROM {sessions_table} WHERE user_id = %s", (user_id,))
+        conn.commit()
+    finally:
+        put_conn(conn)
+
+    return jsonify(status="ok"), 200
 
 
 def get_my_library(env):
@@ -705,6 +883,21 @@ def google_login_prod():
     return google_login("prod")
 
 
+@app.post("/api/auth/forgot-password")
+def forgot_password_prod():
+    return forgot_password("prod")
+
+
+@app.post("/api/auth/reset-password")
+def reset_password_prod():
+    return reset_password("prod")
+
+
+@app.put("/api/auth/email")
+def update_email_prod():
+    return update_email("prod")
+
+
 @app.get("/api/library/mine")
 def get_my_library_prod():
     return get_my_library("prod")
@@ -740,6 +933,21 @@ def google_login_dev():
     return google_login("dev")
 
 
+@app.post("/api/dev/auth/forgot-password")
+def forgot_password_dev():
+    return forgot_password("dev")
+
+
+@app.post("/api/dev/auth/reset-password")
+def reset_password_dev():
+    return reset_password("dev")
+
+
+@app.put("/api/dev/auth/email")
+def update_email_dev():
+    return update_email("dev")
+
+
 @app.get("/api/dev/library/mine")
 def get_my_library_dev():
     return get_my_library("dev")
@@ -753,6 +961,13 @@ def put_my_library_dev():
 @app.get("/api/health")
 def health():
     return jsonify(status="ok")
+
+
+@app.get("/api/config")
+def get_config():
+    # Not env-suffixed (prod/dev) like the auth/library routes - GOOGLE_CLIENT_ID is one
+    # Google Cloud OAuth client shared by both, same as SHARE_HOST.
+    return jsonify(googleClientId=GOOGLE_CLIENT_ID)
 
 
 # ---- static frontend + share pages ----

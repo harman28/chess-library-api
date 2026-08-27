@@ -38,27 +38,63 @@ Anonymous libraries (unchanged):
 - `GET /api/libraries/<id>` — `{playerName, pgn}` (200) or `{"error": "not found"}` (404).
 
 Accounts:
-- `POST /api/auth/signup` — body `{username, password}` → `{token, username}` (201).
-  Username must match `^[A-Za-z0-9_.\-]{3,32}$`; password 8–128 chars. Username
+- `POST /api/auth/signup` — body `{username, password, email?}` → `{token, username}`
+  (201). Username must match `^[A-Za-z0-9_.\-]{3,32}$`; password 8–128 chars. Username
   uniqueness is case-insensitive (`LOWER(username)` unique index) but original casing is
-  preserved for display. 409 if taken, 400 for validation failures.
+  preserved for display. `email` is optional (validated with a loose `EMAIL_RE` if
+  given) — it's what forgot-password sends a reset link to; an account with no email on
+  file simply can't self-serve a reset until one is added via `PUT /api/auth/email`.
+  409 if username taken, 400 for validation failures.
 - `POST /api/auth/login` — body `{username, password}` → `{token, username}` (200) or 401.
   Username lookup is case-insensitive.
 - `POST /api/auth/logout` — header `Authorization: Bearer <token>` → 200. Invalidates
   only that one session token; other active sessions for the same account are untouched
   (e.g. logging out on one device doesn't log you out everywhere).
-- `GET /api/auth/me` — header `Authorization: Bearer <token>` → `{username}` (200) or 401.
-  Used by the frontend on page load to silently check whether a stored token is still
-  valid.
+- `GET /api/auth/me` — header `Authorization: Bearer <token>` → `{username, email}` (200)
+  or 401. Used by the frontend on page load to silently check whether a stored token is
+  still valid, and to populate the account panel's recovery-email field.
+- `PUT /api/auth/email` — header `Authorization: Bearer <token>` required, body
+  `{email}` → `{email}` (200). Adds/changes/clears (empty string) the logged-in
+  account's recovery email. Surfaced in the frontend's account panel, mainly so
+  pre-existing accounts (created before email existed, or via a bare-username signup)
+  can still opt into forgot-password later.
 - `POST /api/auth/google` — body `{credential}` (a Google ID token) → `{token, username}`.
   Returns 503 while `GOOGLE_CLIENT_ID` is unset (see below) — this is deliberate graceful
   degradation, not an error state, since the frontend's Google button stays hidden until
-  this is configured.
+  this is configured. **Frontend wiring is now complete** (added alongside forgot-password,
+  see below): on load the page calls `GET /api/config`, and only if `googleClientId` is
+  non-empty does it lazy-load `https://accounts.google.com/gsi/client`, `initialize()`,
+  and `renderButton()` into `#googleSignInBtn`, unhiding `#authGoogleWrap`. So the button
+  will start actually appearing the moment `GOOGLE_CLIENT_ID` is set on Railway — no
+  further frontend work needed for that.
+- `POST /api/auth/forgot-password` — body `{username}` → `{message}` (**always 200**,
+  even for an unknown username or one with no email on file) — deliberately generic so
+  this endpoint can't be used to enumerate registered usernames. If the username exists
+  and has an email on file: any earlier unused reset token for that account is deleted
+  (one live link at a time), a new single-use token is generated
+  (`secrets.token_urlsafe(32)`, `RESET_TOKEN_TTL_MINUTES` = 60min expiry, stored in
+  `password_resets`/`password_resets_dev`), and an email is sent via `send_email()`
+  pointing at `{SHARE_HOST}/?resetToken=<token>` (or `/dev/?resetToken=...`).
+- `POST /api/auth/reset-password` — body `{token, password}` → `{status: "ok"}` (200) or
+  400 (`"This reset link is invalid or has expired"` for an unknown/expired/already-used
+  token). On success: updates `password_hash`, deletes the token (single-use), and
+  **deletes every session for that account** — same rationale as most account systems,
+  a reset is often triggered because the old password may be compromised, so old
+  sessions shouldn't survive it. The frontend's reset-password modal auto-opens when the
+  page loads with a `?resetToken=` query param (the emailed link), and reopens the
+  login modal on success so the user immediately signs in with the new password.
 - `GET /api/library/mine` / `PUT /api/library/mine` — header `Authorization: Bearer
   <token>` required. One library per account (`UNIQUE` on `user_id`, upserted via
   `ON CONFLICT (user_id) DO UPDATE`). Same `{playerName, pgn}` shape as the anonymous
   endpoints, for the same reason (frontend sends rebuilt PGN text, not its internal
   object shape).
+
+Config:
+- `GET /api/config` — `{googleClientId}` (empty string if unset). Not env-suffixed
+  (prod/dev) like the auth/library routes — `GOOGLE_CLIENT_ID` is one Google Cloud OAuth
+  client shared by both, same as `SHARE_HOST`. Purely a frontend convenience so
+  `static/index.html` can decide at load time whether to show the Google Sign-In button,
+  without needing a templated/rendered index page just for one flag.
 
 Health:
 - `GET /api/health` — `{"status": "ok"}`, plain-browser-visitable, no special headers
@@ -158,7 +194,28 @@ if a share link "doesn't work" for someone before the DNS/custom-domain step (se
   the sessions table and checked on every authenticated request — not a signed/stateless
   JWT. Logout deletes the one row; there's no expiry sweep yet.
 - A user can be logged in from multiple sessions/devices simultaneously; all of them can
-  read/write the one shared library row for that account.
+  read/write the one shared library row for that account. This is the actual mechanism
+  behind "cross-device support" — there's nothing further to build for that, it's just
+  what having an account already gets you (the landing page's hero copy says this
+  explicitly: "your library syncs to your account so you can pick up where you left off
+  on any device").
+- **Forgot-password reset tokens are a separate, deliberately weaker-lived credential
+  than session tokens** — also `secrets.token_urlsafe`, but 60-minute expiry and
+  single-use (deleted on redemption, and any earlier unused one is deleted the moment a
+  new reset is requested). Stored in their own table rather than reusing `sessions`,
+  since a reset token authorizes one specific action (setting a new password), not
+  general API access.
+- **`forgot_password()` never reveals whether a username exists or has an email on
+  file** — it always returns the same 200 message. Don't "improve" this by returning a
+  different message/status for "no such user" vs "no email on file"; that reintroduces
+  the enumeration hole it's specifically designed to close.
+- **No rate limiting on `/api/auth/forgot-password` yet** — unlike `/api/games/share`
+  (which has a per-IP daily cap backed by `share_events`), a bad actor could currently
+  mail-bomb an account's inbox by repeatedly requesting resets for its username. Left
+  unaddressed for now given this project's low-stakes, personal-use scale (same posture
+  as the share endpoint's already-accepted "blast radius is just DB rows" reasoning) —
+  worth revisiting with the same `share_events`-style per-IP counter if this ever
+  actually gets abused.
 
 ## Schema
 
@@ -167,8 +224,18 @@ if a share link "doesn't work" for someone before the DNS/custom-domain step (se
 - `users` / `users_dev` — `(id SERIAL PRIMARY KEY, username TEXT, password_hash TEXT,
   created_at TIMESTAMPTZ DEFAULT now())` plus a functional unique index on
   `LOWER(username)` for case-insensitive uniqueness while preserving display casing.
+  `email` is nullable — always set for Google accounts, optional for password accounts
+  (collected at signup or added later via `PUT /api/auth/email`); forgot-password
+  requires it to be non-null to do anything.
 - `sessions` / `sessions_dev` — `(token TEXT PRIMARY KEY, user_id INTEGER, created_at
   TIMESTAMPTZ DEFAULT now())`.
+- `password_resets` / `password_resets_dev` — `(token TEXT PRIMARY KEY, user_id TEXT NOT
+  NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now())`, indexed on `user_id`. A row's existence past
+  `expires_at`, or past being redeemed, doesn't mean anything — `reset_password()` checks
+  `expires_at > now()` and deletes the row on redemption; nothing currently sweeps
+  expired-but-never-redeemed rows, but the table stays tiny at this project's scale so
+  that hasn't mattered.
 - A `libraries`/`libraries_dev` row can now optionally carry a `user_id` (nullable,
   `UNIQUE`) linking it to an account. Existing anonymous rows have `user_id IS NULL`,
   which Postgres allows any number of under a unique index/constraint — they don't
@@ -211,12 +278,22 @@ separate services. This means:
   whenever, no urgency.
 - `GOOGLE_CLIENT_ID` — **not yet set**. Required for `/api/auth/google` to work; until
   it's provisioned, that endpoint returns 503 and the frontend keeps its Google button
-  hidden. This has to come from the user via Google Cloud Console (create an OAuth 2.0
-  Client ID, web application type, with `https://library.chessscenes.com` as an
-  authorized JavaScript origin) — not something obtainable programmatically. Once set,
-  the frontend also needs the same Client ID wired into its Google Identity Services
-  initialization (currently not implemented, since there's nothing to configure it
-  with yet).
+  hidden (via `GET /api/config` returning an empty `googleClientId`). This has to come
+  from the user via Google Cloud Console (create an OAuth 2.0 Client ID, web application
+  type, with `https://library.chessscenes.com` as an authorized JavaScript origin) — not
+  something obtainable programmatically. **Unlike before, the frontend side is now fully
+  built and just waiting on this value** — no further code changes needed once it's set,
+  the button will start rendering itself on the next page load.
+- `SMTP_HOST` / `SMTP_PORT` (default `587`) / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM`
+  — **not yet set**. Required for forgot-password emails to actually be delivered; until
+  configured, `send_email()` logs the would-be email (including the real reset link) to
+  stdout instead of sending it — same graceful-degradation pattern as
+  `GOOGLE_CLIENT_ID`, so the whole forgot/reset-password flow is fully exercisable in
+  dev/staging (read the reset link out of the Railway logs) before real SMTP credentials
+  exist. Any standard SMTP-with-STARTTLS provider works (e.g. an app password from a
+  personal Gmail account, or a transactional-email provider's SMTP endpoint) — this was
+  deliberately kept to Python's stdlib `smtplib` rather than adding a provider-specific
+  SDK dependency, same instinct as the `pbkdf2:sha256`/pure-Python-deps choices below.
 
 ## Local testing
 
