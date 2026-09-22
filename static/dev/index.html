@@ -111,7 +111,7 @@ td{padding:.5rem .6rem;border-bottom:1px solid var(--surface);vertical-align:top
 tr.game td{transition:background .12s}
 tr.game:hover td{background:var(--surface-alt)}
 .num{color:var(--text-faint);width:2rem}.event{color:var(--link);max-width:22ch}.players{white-space:nowrap}.result{color:var(--result);font-weight:600}.moves{color:var(--moves-col)}.date{color:var(--date-col)}
-.detail-flex{display:flex;flex-direction:column;align-items:flex-start;gap:.5rem}
+.detail-flex{display:flex;gap:1rem;align-items:flex-start;flex-wrap:wrap}
 .move-formatted{display:grid;grid-template-columns:2.4rem 1fr 1fr;column-gap:.5rem;row-gap:.25rem;align-items:start;font-size:.88rem;line-height:1.5;padding-right:1.6rem;color:var(--text);word-break:break-word}
 .move-num{color:var(--text-faint);font-weight:600;padding-top:.2rem}
 .move-cell{display:flex;flex-wrap:wrap;align-items:center;gap:.1rem}
@@ -131,17 +131,13 @@ tr.game:hover td{background:var(--surface-alt)}
 #columnsList li .drag-handle{color:var(--border-hover);cursor:grab;user-select:none}
 #columnsList li label{flex:1;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
 .pgnrow{display:none}.pgnrow.open{display:table-row}.pgnrow td{padding:0}.pgnrow.open td{padding:.6rem .8rem}
-.pgnwrap{width:360px;max-width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:.3rem}
+.pgnwrap{flex:1;min-width:260px;box-sizing:border-box;display:flex;flex-direction:column;gap:.3rem}
 .pgnwrap-scroll{max-height:420px;overflow-y:auto;background:var(--surface-deep);padding:.6rem .8rem;border-radius:.4rem;box-sizing:border-box}
-.pgnwrap-actions{display:flex;gap:.3rem;justify-content:space-between;align-items:center;width:360px;max-width:100%;box-sizing:border-box}
-.pgnwrap-actions-icons{display:flex;gap:.3rem}
+.pgnwrap-actions{display:flex;gap:.3rem;justify-content:flex-end}
 .pgnwrap-actions button{background:rgba(15,23,42,.7);border:none;color:var(--text-dim);cursor:pointer;font-size:.75rem;padding:.2rem .3rem;border-radius:.15rem;line-height:1}
 .pgnwrap-actions button:hover{color:var(--text);background:rgba(30,41,59,.9)}
-.pgnwrap-actions .moves-toggle-btn{background:var(--surface-alt);color:var(--text-dim);border:1px solid var(--border);padding:.3rem .6rem;border-radius:.3rem;font-size:.78rem}
-.pgnwrap-actions .moves-toggle-btn:hover{background:var(--border);color:var(--text)}
-.chess-widget-wrap{display:flex;flex-direction:column;align-items:center;gap:.4rem;width:360px;box-sizing:border-box}
-.cw-caption{width:100%;box-sizing:border-box;min-height:2.5rem;background:rgba(56,189,248,.09);border-left:3px solid var(--accent);color:var(--comment);padding:.5rem .7rem;border-radius:.25rem;font-style:italic;font-size:.85rem;line-height:1.45;display:flex;align-items:center}
-.cw-caption.empty{color:var(--text-faint);font-style:normal;background:var(--surface-alt);border-left-color:var(--border)}
+.chess-widget-wrap{flex:0 0 360px;order:2;display:flex;flex-direction:column;align-items:center;gap:.4rem;width:360px;box-sizing:border-box}
+.pgnwrap{order:1}
 .cw-nameplate{width:100%;box-sizing:border-box;font-size:.82rem;font-weight:600;color:var(--text-dim);padding:.35rem .6rem;background:var(--surface-alt);border-radius:.3rem}
 .cw-board-wrap{outline:none;width:100%}
 .cw-board{position:relative;width:360px;height:360px;border:1px solid var(--border);border-radius:.4rem;overflow:hidden;box-shadow:0 2px 10px var(--shadow)}
@@ -278,9 +274,6 @@ body.sheet-open .game-sheet{transform:translateY(0)}
 .game-sheet .cw-board{width:260px;height:260px}
 .game-sheet .cw-error{width:260px}
 .sheet-moves .move-formatted{padding-right:0}
-.sheet-moves-toggle-row{width:260px;margin:.4rem auto 0;box-sizing:border-box}
-.sheet-moves-toggle-row .moves-toggle-btn{width:100%;background:var(--surface-alt);color:var(--text-dim);border:1px solid var(--border);padding:.4rem .6rem;border-radius:.3rem;font-size:.8rem;cursor:pointer}
-.sheet-moves-toggle-row .moves-toggle-btn:hover{background:var(--border);color:var(--text)}
 
 .toolbar{position:sticky;top:0;z-index:15;background:var(--bg);padding-top:.6rem;padding-bottom:.6rem;margin-left:-2rem;margin-right:-2rem;padding-left:2rem;padding-right:2rem;border-bottom:1px solid var(--border)}
 @media (max-width:700px){
@@ -852,14 +845,12 @@ function createChessWidget(container, g){
     + `<button class="cw-btn cw-flip" title="Flip board" aria-label="Flip board">⇅</button>`
     + `<button class="cw-btn cw-next" title="Next move" aria-label="Next move">›</button>`
     + `<button class="cw-btn cw-last" title="Last move" aria-label="Last move">⏭</button>`
-    + `</div>`
-    + `<div class="cw-caption"></div>`;
+    + `</div>`;
   const squaresEl = container.querySelector(".cw-squares");
   const piecesEl = container.querySelector(".cw-pieces");
   const boardWrap = container.querySelector(".cw-board-wrap");
   const nameTop = container.querySelector(".cw-nameplate-top");
   const nameBottom = container.querySelector(".cw-nameplate-bottom");
-  const captionEl = container.querySelector(".cw-caption");
   const prevBtn=container.querySelector(".cw-prev"), nextBtn=container.querySelector(".cw-next"),
         firstBtn=container.querySelector(".cw-first"), lastBtn=container.querySelector(".cw-last"),
         flipBtn=container.querySelector(".cw-flip");
@@ -931,16 +922,11 @@ function createChessWidget(container, g){
     if(prevActive) prevActive.classList.remove("cw-active");
     const prevActiveComment = scope.querySelector(".move-comment.cw-active");
     if(prevActiveComment) prevActiveComment.classList.remove("cw-active");
-    let comment = null;
     if(ply>0){
       const span = scope.querySelector('.move-san-editable[data-ply="'+ply+'"]');
       if(span){ span.classList.add("cw-active"); if(span.scrollIntoView) span.scrollIntoView({block:"center", behavior: reduceMotion ? "auto" : "smooth"}); }
-      comment = scope.querySelector('.move-comment[data-ply="'+ply+'"]');
+      const comment = scope.querySelector('.move-comment[data-ply="'+ply+'"]');
       if(comment) comment.classList.add("cw-active");
-    }
-    if(captionEl){
-      if(comment){ captionEl.textContent = comment.textContent; captionEl.classList.remove("empty"); }
-      else { captionEl.textContent = "No comment on this move."; captionEl.classList.add("empty"); }
     }
   }
   function updateButtons(){
@@ -1360,7 +1346,7 @@ function render(){
       +cells
       +`<td class="actions"><div class="analyse-split"><button data-i="${g.idx}" class="copy-btn" title="${getAnalysisSite()==="lichess"?"Opens Lichess with this game loaded":"Copies the PGN, then opens chess.com to paste it in"}">Analyse \u2197</button><button data-i="${g.idx}" class="analyse-chevron" title="Choose analysis site" aria-label="Choose analysis site">\u25be</button></div></td>`;
     const pr=document.createElement("tr"); pr.className="pgnrow"; pr.id="pgnrow-"+g.idx;
-    pr.innerHTML=`<td colspan="9999" style="padding:.4rem .8rem;"><div class="detail-flex"><div class="chess-widget-wrap"></div><div class="pgnwrap-actions"><button class="moves-toggle-btn" data-i="${g.idx}" aria-expanded="false">Show move list \u25be</button><div class="pgnwrap-actions-icons"><button class="edit-game-btn" data-i="${g.idx}" title="edit game info">\u270e</button><button class="share-game-btn" data-i="${g.idx}" title="Share this game"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg></button><button class="mini-copy" data-i="${g.idx}" title="copy PGN"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div></div><div class="pgnwrap hidden"><div class="pgnwrap-scroll"><div class="move-formatted">${formatMovesWithComments(g.movetext, g.idx)}</div></div></div></div></td>`;
+    pr.innerHTML=`<td colspan="9999" style="padding:.4rem .8rem;"><div class="detail-flex"><div class="chess-widget-wrap"></div><div class="pgnwrap"><div class="pgnwrap-scroll"><div class="move-formatted">${formatMovesWithComments(g.movetext, g.idx)}</div></div><div class="pgnwrap-actions"><button class="edit-game-btn" data-i="${g.idx}" title="edit game info">\u270e</button><button class="share-game-btn" data-i="${g.idx}" title="Share this game"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg></button><button class="mini-copy" data-i="${g.idx}" title="copy PGN"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div></div></div></td>`;
     tbody.appendChild(tr); tbody.appendChild(pr);
   }); updateActionButtons(); renderMobileList(filtered); updateToolbarHeightVar(); }
 let lastCheckedMobileIdx=null;
@@ -1440,7 +1426,7 @@ function openGameSheet(g){
   document.getElementById("sheetTitle").textContent=(g.headers.White||"")+" vs "+(g.headers.Black||"");
   document.getElementById("sheetSub").innerHTML=`<span class="ev">${esc(g.headers.Event||"")}</span> · ${esc(g.headers.Date||"")} · <span style="color:var(--result)">${esc(g.headers.Result||"")}</span>`;
   const body=document.getElementById("sheetBody");
-  body.innerHTML=`<div class="sheet-embed-sticky"><div class="chess-widget-wrap"></div><div class="sheet-moves-toggle-row"><button class="moves-toggle-btn" aria-expanded="false">Show move list ▾</button></div></div><div class="sheet-moves hidden"><div class="sheet-moves-scroll"><div class="move-formatted">${formatMovesWithComments(g.movetext, g.idx)}</div></div></div>`;
+  body.innerHTML=`<div class="sheet-embed-sticky"><div class="chess-widget-wrap"></div></div><div class="sheet-moves"><div class="sheet-moves-scroll"><div class="move-formatted">${formatMovesWithComments(g.movetext, g.idx)}</div></div></div>`;
   createChessWidget(body.querySelector(".chess-widget-wrap"), g);
   document.body.classList.add("sheet-open");
   history.pushState({sheet:true},"");
@@ -1542,16 +1528,6 @@ document.getElementById("sheetCopyBtn").addEventListener("click",()=>{
   const old=btn.innerHTML; btn.innerHTML="✓"; setTimeout(()=>btn.innerHTML=old,1200);
 });
 document.getElementById("sheetBody").addEventListener("click",(e)=>{
-  const movesToggleBtn=e.target.closest("button.moves-toggle-btn");
-  if(movesToggleBtn){
-    const sheetMoves=document.querySelector("#sheetBody .sheet-moves");
-    if(sheetMoves){
-      const nowHidden=sheetMoves.classList.toggle("hidden");
-      movesToggleBtn.textContent=nowHidden?"Show move list ▾":"Hide move list ▴";
-      movesToggleBtn.setAttribute("aria-expanded", nowHidden?"false":"true");
-    }
-    return;
-  }
   const commentBtn=e.target.closest(".move-comment-btn");
   if(commentBtn){ openCommentModal(parseInt(commentBtn.dataset.gameIdx), parseInt(commentBtn.dataset.moveIdx)); return; }
   const moveSpan=e.target.closest(".move-san-editable");
@@ -1727,18 +1703,6 @@ document.addEventListener("click",(e)=>{
   if(!panel.classList.contains("hidden") && !panel.contains(e.target) && !e.target.closest(".analyse-chevron")){ panel.classList.add("hidden"); }
 });
 document.getElementById("rows").addEventListener("click",(e)=>{
-  const movesToggleBtn=e.target.closest("button.moves-toggle-btn");
-  if(movesToggleBtn){
-    e.stopPropagation();
-    const detailFlex=movesToggleBtn.closest(".detail-flex");
-    const pgnwrap=detailFlex && detailFlex.querySelector(".pgnwrap");
-    if(pgnwrap){
-      const nowHidden=pgnwrap.classList.toggle("hidden");
-      movesToggleBtn.textContent=nowHidden?"Show move list ▾":"Hide move list ▴";
-      movesToggleBtn.setAttribute("aria-expanded", nowHidden?"false":"true");
-    }
-    return;
-  }
   const editBtn=e.target.closest("button.edit-game-btn");
   if(editBtn){ e.stopPropagation(); const i=parseInt(editBtn.dataset.i); const g=games.find(x=>x.idx===i); if(g) openEditGameModal(g); return; }
   const shareBtn=e.target.closest("button.share-game-btn");
