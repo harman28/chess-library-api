@@ -1,0 +1,89 @@
+# Chess Library API
+
+Flask + Postgres backend that also serves the entire `library.chessscenes.com` site
+(frontend lives in `static/`, no separate build step). Deployed on Railway.
+
+See `CLAUDE.md` for the full design/architecture writeup (endpoints, schema, auth
+design, why the frontend moved here, etc). This file is just what's needed to run it
+locally and deploy it.
+
+## Local development
+
+```
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+DATABASE_URL=postgresql:///chesslibrary ALLOWED_ORIGIN=* python3 app.py
+```
+
+Needs a real local Postgres (`createdb chesslibrary` first) — `init_db()` creates all
+tables/indexes idempotently on startup. There's no SQLite fallback.
+
+Visit `http://localhost:5000/` for prod-path behavior or `http://localhost:5000/dev/`
+for the isolated dev-path behavior (see "Prod/dev split" in CLAUDE.md — it's a URL
+prefix + table-suffix split within one process, not a separate deployment).
+
+## Deployment (Railway)
+
+One Railway project, **`chess-library-api`** (id `9e4b43b3-48c7-4d9e-afa1-d29c94143c80`),
+single environment (`production`, id `e31642c4-7afd-4cf1-a924-e91de49037b9`), three services:
+
+| Service | What | Deploys from | Domain |
+|---|---|---|---|
+| `web` | the real, live site | `main` branch | `library.chessscenes.com`, `chess-library-api.up.railway.app` |
+| `chess-library-api-staging` | review environment before promoting to prod | `staging` branch | `chess-library-api-staging-production.up.railway.app` |
+| `Postgres` | shared DB for both of the above | — | — |
+
+**Both `web` and staging share the same Postgres.** Staging's own `/dev/` path is safe
+to test against; its bare `/` path reads/writes the exact same tables real users' prod
+data lives in, since there's no second database. Always test against staging's `/dev/`,
+never its `/`, for anything that writes data.
+
+### Workflow
+
+Branch off `main` → do the work → merge into `staging` → push → review live at
+staging's domain → once approved, merge `staging` into `main` → push → deploys to the
+real site. Keep `staging` fast-forwarded to `main` after every promotion so it doesn't
+drift into its own permanent fork.
+
+### Getting Railway CLI access
+
+```
+npm install -g @railway/cli
+railway login --browserless   # prints a link + code; approve from your own browser/phone
+railway link -p 9e4b43b3-48c7-4d9e-afa1-d29c94143c80 -e e31642c4-7afd-4cf1-a924-e91de49037b9
+```
+
+Service IDs (for `--service` on `railway variable`, `railway redeploy`, etc — `railway
+status --json` re-derives these if they ever drift):
+- `web` (prod): `c36b79e8-78be-4be6-9ae9-51cd19295935`
+- `chess-library-api-staging`: `624a762e-56b9-4858-b624-fe1bc0aeaa88`
+- `Postgres`: `1ef63dbd-6eef-4697-8c77-3cbef78cbe13`
+
+### Environment variables (set per-service on Railway, never committed)
+
+Required:
+- `DATABASE_URL` — auto-linked via Railway variable reference, not hardcoded.
+- `ALLOWED_ORIGIN` — comma-separated CORS allowlist for `/api/*`.
+
+Optional, both currently unset on every service (features gracefully degrade to
+"disabled" rather than erroring when unset — see the relevant code for exactly how
+before wiring these up again):
+- `GOOGLE_CLIENT_ID` — enables Google Sign-In. From Google Cloud Console → APIs &
+  Credentials → OAuth client ID (Web application), with the site's real domain(s) as
+  authorized JavaScript origins. Only the Client ID is needed server-side, no secret.
+- `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` — for sending
+  real emails (e.g. a password-reset flow), if one gets built.
+  **Important, learned the hard way**: Railway blocks outbound SMTP entirely (confirmed
+  by testing live — an IPv6-routing error, and after forcing IPv4, a silent connection
+  timeout on port 587 to Gmail). No amount of code-level fixing gets around a
+  platform-level port block. If email sending is ever needed from this app, use an
+  HTTP-based transactional email API instead (e.g. Resend, SendGrid, Postmark) — regular
+  HTTPS/443 egress works fine from Railway, only raw SMTP ports are blocked.
+
+### Deploying
+
+Railway auto-deploys `web` on push to `main`, and the staging service on push to
+`staging` (both connected via "Deploy from GitHub repo"). Verify a deploy actually
+landed with `curl` against the live URL rather than assuming a push succeeded —
+`railway logs --service <id>` and `railway status --json` (checks running deployment's
+commit hash against `git log`) are the fastest ways to confirm.

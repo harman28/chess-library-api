@@ -218,6 +218,16 @@ separate services. This means:
   initialization (currently not implemented, since there's nothing to configure it
   with yet).
 
+**If email sending ever gets built (e.g. a password-reset flow): don't use raw SMTP.**
+Confirmed live by testing against this project's actual Railway services (2026-09) —
+Railway blocks outbound SMTP entirely. Symptom progression: `smtplib` first failed with
+an IPv6 `ENETUNREACH` (Railway containers have no outbound IPv6 route), and forcing
+IPv4 resolution didn't fix it — it just changed the failure to a silent connection
+timeout on port 587 to Gmail, which is what a platform-level port block looks like, not
+a routing issue. No code-level fix gets around this. Use an HTTP-based transactional
+email API instead (Resend, SendGrid, Postmark, etc.) — regular HTTPS/443 egress works
+fine from Railway, only raw SMTP ports are blocked.
+
 ## Local testing
 
 A local Postgres is available (`psql`, `pg_ctl` via Homebrew, `postgresql@17`). Pattern
