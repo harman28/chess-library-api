@@ -22,7 +22,6 @@ SESSION_TOKEN_BYTES = 32  # secrets.token_urlsafe(32) -> ~43 url-safe chars, ~25
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{3,32}$")
 MIN_PASSWORD_LEN = 8
 MAX_PASSWORD_LEN = 128
-SHARE_HOST = "https://library.chessscenes.com"
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 PIECES_DIR = os.path.join(STATIC_DIR, "pieces")
@@ -48,64 +47,60 @@ def put_conn(conn):
     pool.putconn(conn)
 
 
-LIBRARIES_TABLES = {"prod": "libraries", "dev": "libraries_dev"}
-USERS_TABLES = {"prod": "users", "dev": "users_dev"}
-SESSIONS_TABLES = {"prod": "sessions", "dev": "sessions_dev"}
+# Each deployment (the real "web" service, the "chess-library-api-staging" service)
+# now has its own dedicated Postgres database, so "which environment" is entirely a
+# function of which DATABASE_URL this process was started with - there's no longer a
+# prod/dev split within a single database, and no /dev/ URL path or /api/dev/... route
+# prefix. Table names are plain and unsuffixed as a result.
 
 
 def init_db():
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            for table in LIBRARIES_TABLES.values():
-                cur.execute(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS {table} (
-                        id TEXT PRIMARY KEY,
-                        player_name TEXT NOT NULL,
-                        pgn TEXT NOT NULL,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                    )
-                    """
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS libraries (
+                    id TEXT PRIMARY KEY,
+                    player_name TEXT NOT NULL,
+                    pgn TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
-            for users_table in USERS_TABLES.values():
-                cur.execute(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS {users_table} (
-                        id TEXT PRIMARY KEY,
-                        username TEXT NOT NULL,
-                        password_hash TEXT,
-                        google_sub TEXT UNIQUE,
-                        email TEXT,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                    )
-                    """
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    password_hash TEXT,
+                    google_sub TEXT UNIQUE,
+                    email TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
-                cur.execute(
-                    f"CREATE UNIQUE INDEX IF NOT EXISTS {users_table}_username_lower_idx ON {users_table} (LOWER(username))"
+                """
+            )
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (LOWER(username))"
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    token TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
-            for env in ("prod", "dev"):
-                sessions_table = SESSIONS_TABLES[env]
-                users_table = USERS_TABLES[env]
-                cur.execute(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS {sessions_table} (
-                        token TEXT PRIMARY KEY,
-                        user_id TEXT NOT NULL REFERENCES {users_table}(id) ON DELETE CASCADE,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                    )
-                    """
-                )
-                libraries_table = LIBRARIES_TABLES[env]
-                cur.execute(
-                    f"ALTER TABLE {libraries_table} ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES {users_table}(id) ON DELETE CASCADE"
-                )
-                cur.execute(
-                    f"ALTER TABLE {libraries_table} ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
-                )
-                cur.execute(
-                    f"CREATE UNIQUE INDEX IF NOT EXISTS {libraries_table}_user_id_unique ON {libraries_table} (user_id)"
-                )
+                """
+            )
+            cur.execute(
+                "ALTER TABLE libraries ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE"
+            )
+            cur.execute(
+                "ALTER TABLE libraries ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+            )
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS libraries_user_id_unique ON libraries (user_id)"
+            )
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS share_events (
@@ -124,7 +119,8 @@ def init_db():
 # ---- anonymous link-based library (existing "Save My Library" flow; left in place, not used by new signups) ----
 
 
-def create_library(table):
+@app.post("/api/libraries")
+def create_library():
     data = request.get_json(silent=True) or {}
     # Empty playerName is allowed here (unlike /api/games/share): a guest saving their
     # own fresh library from someone else's shared-game view has no name of their own
@@ -144,7 +140,7 @@ def create_library(table):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                f"INSERT INTO {table} (id, player_name, pgn) VALUES (%s, %s, %s)",
+                "INSERT INTO libraries (id, player_name, pgn) VALUES (%s, %s, %s)",
                 (library_id, player_name, pgn),
             )
         conn.commit()
@@ -154,12 +150,13 @@ def create_library(table):
     return jsonify(id=library_id), 201
 
 
-def get_library(table, library_id):
+@app.get("/api/libraries/<library_id>")
+def get_library(library_id):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT player_name, pgn FROM {table} WHERE id = %s",
+                "SELECT player_name, pgn FROM libraries WHERE id = %s",
                 (library_id,),
             )
             row = cur.fetchone()
@@ -173,31 +170,11 @@ def get_library(table, library_id):
     return jsonify(playerName=player_name, pgn=pgn)
 
 
-@app.post("/api/libraries")
-def create_library_prod():
-    return create_library(LIBRARIES_TABLES["prod"])
-
-
-@app.get("/api/libraries/<library_id>")
-def get_library_prod(library_id):
-    return get_library(LIBRARIES_TABLES["prod"], library_id)
-
-
-@app.post("/api/dev/libraries")
-def create_library_dev():
-    return create_library(LIBRARIES_TABLES["dev"])
-
-
-@app.get("/api/dev/libraries/<library_id>")
-def get_library_dev(library_id):
-    return get_library(LIBRARIES_TABLES["dev"], library_id)
-
-
 # ---- single-game sharing ----
-# A shared game is stored in the exact same libraries/libraries_dev tables as the
-# anonymous "Save My Library" flow above - it's just a smaller instance of the same
-# {playerName, pgn} shape (one game instead of a whole collection). What's new here is
-# a dynamically-rendered page per share (real per-game <meta> tags + a board preview
+# A shared game is stored in the exact same libraries table as the anonymous "Save My
+# Library" flow above - it's just a smaller instance of the same {playerName, pgn}
+# shape (one game instead of a whole collection). What's new here is a
+# dynamically-rendered page per share (real per-game <meta> tags + a board preview
 # image), since library.chessscenes.com used to be pure static GitHub Pages and could
 # never vary per-URL - see chess-library-api/CLAUDE.md for the full history.
 
@@ -334,15 +311,25 @@ def inject_share_meta(html_content, meta):
     return html_content
 
 
-def read_static_html(env):
-    filename = os.path.join(STATIC_DIR, "dev", "index.html") if env == "dev" else os.path.join(STATIC_DIR, "index.html")
-    with open(filename, "r", encoding="utf-8") as f:
+def read_static_html():
+    with open(os.path.join(STATIC_DIR, "index.html"), "r", encoding="utf-8") as f:
         return f.read()
 
 
-def share_url_for(env, library_id):
-    prefix = "dev/" if env == "dev" else ""
-    return f"{SHARE_HOST}/{prefix}g/{library_id}"
+def request_origin():
+    # Derived from the incoming request rather than a hardcoded domain, so share links
+    # are correct on whichever host actually served the request - the real custom
+    # domain, its raw *.up.railway.app address, or the separate staging deployment's
+    # own domain - with nothing to update here when a domain changes. Railway
+    # terminates TLS at its edge and forwards plain HTTP internally, so the scheme has
+    # to be read from X-Forwarded-Proto rather than trusted from the request itself;
+    # default to https since every path a real visitor takes to this app is https.
+    scheme = request.headers.get("X-Forwarded-Proto", "https")
+    return f"{scheme}://{request.host}"
+
+
+def share_url_for(library_id):
+    return f"{request_origin()}/g/{library_id}"
 
 
 def client_ip():
@@ -352,7 +339,8 @@ def client_ip():
     return request.remote_addr or "unknown"
 
 
-def create_game_share(env):
+@app.post("/api/games/share")
+def create_game_share():
     ip = client_ip()
     conn = get_conn()
     try:
@@ -384,13 +372,12 @@ def create_game_share(env):
         return jsonify(error=f"You can share at most {SHARE_MAX_GAMES} games in one link"), 400
 
     library_id = secrets.token_urlsafe(ID_BYTES)
-    libraries_table = LIBRARIES_TABLES[env]
 
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                f"INSERT INTO {libraries_table} (id, player_name, pgn) VALUES (%s, %s, %s)",
+                "INSERT INTO libraries (id, player_name, pgn) VALUES (%s, %s, %s)",
                 (library_id, player_name, pgn),
             )
             cur.execute("INSERT INTO share_events (ip) VALUES (%s)", (ip,))
@@ -398,15 +385,15 @@ def create_game_share(env):
     finally:
         put_conn(conn)
 
-    return jsonify(id=library_id, url=share_url_for(env, library_id)), 201
+    return jsonify(id=library_id, url=share_url_for(library_id)), 201
 
 
-def share_page(env, library_id):
-    libraries_table = LIBRARIES_TABLES[env]
+@app.get("/g/<library_id>")
+def share_page(library_id):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT player_name, pgn FROM {libraries_table} WHERE id = %s", (library_id,))
+            cur.execute("SELECT player_name, pgn FROM libraries WHERE id = %s", (library_id,))
             row = cur.fetchone()
     finally:
         put_conn(conn)
@@ -415,21 +402,21 @@ def share_page(env, library_id):
 
     player_name, pgn = row
     games = parse_all_games(pgn)
-    share_url = share_url_for(env, library_id)
+    share_url = share_url_for(library_id)
     meta = build_share_meta(games, player_name, share_url, share_url + "/preview.png")
 
-    html_content = inject_share_meta(read_static_html(env), meta)
+    html_content = inject_share_meta(read_static_html(), meta)
     resp = app.response_class(html_content, mimetype="text/html")
     resp.headers["Cache-Control"] = "no-cache"
     return resp
 
 
-def share_preview_png(env, library_id):
-    libraries_table = LIBRARIES_TABLES[env]
+@app.get("/g/<library_id>/preview.png")
+def share_preview_png(library_id):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT pgn FROM {libraries_table} WHERE id = %s", (library_id,))
+            cur.execute("SELECT pgn FROM libraries WHERE id = %s", (library_id,))
             row = cur.fetchone()
     finally:
         put_conn(conn)
@@ -450,7 +437,7 @@ def share_preview_png(env, library_id):
 # ---- accounts ----
 
 
-def get_user_from_request(env):
+def get_user_from_request():
     """Returns {"id", "username"} for a valid Authorization: Bearer <token> header, else None."""
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -458,13 +445,11 @@ def get_user_from_request(env):
     token = auth_header[len("Bearer ") :].strip()
     if not token:
         return None
-    users_table = USERS_TABLES[env]
-    sessions_table = SESSIONS_TABLES[env]
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT u.id, u.username FROM {sessions_table} s JOIN {users_table} u ON u.id = s.user_id WHERE s.token = %s",
+                "SELECT u.id, u.username FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = %s",
                 (token,),
             )
             row = cur.fetchone()
@@ -475,19 +460,20 @@ def get_user_from_request(env):
     return {"id": row[0], "username": row[1]}
 
 
-def create_session(sessions_table, user_id):
+def create_session(user_id):
     conn = get_conn()
     try:
         token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
         with conn.cursor() as cur:
-            cur.execute(f"INSERT INTO {sessions_table} (token, user_id) VALUES (%s, %s)", (token, user_id))
+            cur.execute("INSERT INTO sessions (token, user_id) VALUES (%s, %s)", (token, user_id))
         conn.commit()
         return token
     finally:
         put_conn(conn)
 
 
-def signup(env):
+@app.post("/api/auth/signup")
+def signup():
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
@@ -499,8 +485,6 @@ def signup(env):
     if len(password) > MAX_PASSWORD_LEN:
         return jsonify(error="Password is too long"), 400
 
-    users_table = USERS_TABLES[env]
-    sessions_table = SESSIONS_TABLES[env]
     user_id = secrets.token_urlsafe(ID_BYTES)
     # Explicit pbkdf2 rather than werkzeug's newer scrypt default: scrypt needs
     # hashlib built against an OpenSSL with scrypt support, which isn't a safe
@@ -510,33 +494,32 @@ def signup(env):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT 1 FROM {users_table} WHERE LOWER(username) = LOWER(%s)", (username,))
+            cur.execute("SELECT 1 FROM users WHERE LOWER(username) = LOWER(%s)", (username,))
             if cur.fetchone():
                 return jsonify(error="That username is already taken"), 409
             cur.execute(
-                f"INSERT INTO {users_table} (id, username, password_hash) VALUES (%s, %s, %s)",
+                "INSERT INTO users (id, username, password_hash) VALUES (%s, %s, %s)",
                 (user_id, username, password_hash),
             )
         conn.commit()
     finally:
         put_conn(conn)
 
-    token = create_session(sessions_table, user_id)
+    token = create_session(user_id)
     return jsonify(token=token, username=username), 201
 
 
-def login(env):
+@app.post("/api/auth/login")
+def login():
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
-    users_table = USERS_TABLES[env]
-    sessions_table = SESSIONS_TABLES[env]
 
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT id, username, password_hash FROM {users_table} WHERE LOWER(username) = LOWER(%s)",
+                "SELECT id, username, password_hash FROM users WHERE LOWER(username) = LOWER(%s)",
                 (username,),
             )
             row = cur.fetchone()
@@ -547,34 +530,36 @@ def login(env):
         return jsonify(error="Incorrect username or password"), 401
 
     user_id, real_username, _ = row
-    token = create_session(sessions_table, user_id)
+    token = create_session(user_id)
     return jsonify(token=token, username=real_username), 200
 
 
-def logout(env):
+@app.post("/api/auth/logout")
+def logout():
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[len("Bearer ") :].strip()
         if token:
-            sessions_table = SESSIONS_TABLES[env]
             conn = get_conn()
             try:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {sessions_table} WHERE token = %s", (token,))
+                    cur.execute("DELETE FROM sessions WHERE token = %s", (token,))
                 conn.commit()
             finally:
                 put_conn(conn)
     return jsonify(status="ok")
 
 
-def me(env):
-    user = get_user_from_request(env)
+@app.get("/api/auth/me")
+def me():
+    user = get_user_from_request()
     if not user:
         return jsonify(error="not authenticated"), 401
     return jsonify(username=user["username"])
 
 
-def google_login(env):
+@app.post("/api/auth/google")
+def google_login():
     if not GOOGLE_CLIENT_ID:
         return jsonify(error="Google sign-in is not configured on this server"), 503
 
@@ -597,13 +582,10 @@ def google_login(env):
     email = idinfo.get("email") or ""
     display_name = idinfo.get("name") or email or "Google User"
 
-    users_table = USERS_TABLES[env]
-    sessions_table = SESSIONS_TABLES[env]
-
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT id, username FROM {users_table} WHERE google_sub = %s", (google_sub,))
+            cur.execute("SELECT id, username FROM users WHERE google_sub = %s", (google_sub,))
             row = cur.fetchone()
             if row:
                 user_id, username = row
@@ -612,33 +594,33 @@ def google_login(env):
                 username = display_name
                 suffix = 1
                 while True:
-                    cur.execute(f"SELECT 1 FROM {users_table} WHERE LOWER(username) = LOWER(%s)", (username,))
+                    cur.execute("SELECT 1 FROM users WHERE LOWER(username) = LOWER(%s)", (username,))
                     if not cur.fetchone():
                         break
                     suffix += 1
                     username = f"{display_name}{suffix}"
                 cur.execute(
-                    f"INSERT INTO {users_table} (id, username, google_sub, email) VALUES (%s, %s, %s, %s)",
+                    "INSERT INTO users (id, username, google_sub, email) VALUES (%s, %s, %s, %s)",
                     (user_id, username, google_sub, email),
                 )
         conn.commit()
     finally:
         put_conn(conn)
 
-    token = create_session(sessions_table, user_id)
+    token = create_session(user_id)
     return jsonify(token=token, username=username), 200
 
 
-def get_my_library(env):
-    user = get_user_from_request(env)
+@app.get("/api/library/mine")
+def get_my_library():
+    user = get_user_from_request()
     if not user:
         return jsonify(error="not authenticated"), 401
-    libraries_table = LIBRARIES_TABLES[env]
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT player_name, pgn FROM {libraries_table} WHERE user_id = %s",
+                "SELECT player_name, pgn FROM libraries WHERE user_id = %s",
                 (user["id"],),
             )
             row = cur.fetchone()
@@ -650,8 +632,9 @@ def get_my_library(env):
     return jsonify(playerName=player_name, pgn=pgn)
 
 
-def put_my_library(env):
-    user = get_user_from_request(env)
+@app.put("/api/library/mine")
+def put_my_library():
+    user = get_user_from_request()
     if not user:
         return jsonify(error="not authenticated"), 401
 
@@ -662,13 +645,12 @@ def put_my_library(env):
     if len(pgn.encode("utf-8")) > MAX_PGN_BYTES:
         return jsonify(error="pgn is too large"), 413
 
-    libraries_table = LIBRARIES_TABLES[env]
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                f"""
-                INSERT INTO {libraries_table} (id, user_id, player_name, pgn, updated_at)
+                """
+                INSERT INTO libraries (id, user_id, player_name, pgn, updated_at)
                 VALUES (%s, %s, %s, %s, now())
                 ON CONFLICT (user_id) DO UPDATE SET player_name = EXCLUDED.player_name, pgn = EXCLUDED.pgn, updated_at = now()
                 """,
@@ -680,82 +662,12 @@ def put_my_library(env):
     return jsonify(status="ok")
 
 
-@app.post("/api/auth/signup")
-def signup_prod():
-    return signup("prod")
-
-
-@app.post("/api/auth/login")
-def login_prod():
-    return login("prod")
-
-
-@app.post("/api/auth/logout")
-def logout_prod():
-    return logout("prod")
-
-
-@app.get("/api/auth/me")
-def me_prod():
-    return me("prod")
-
-
-@app.post("/api/auth/google")
-def google_login_prod():
-    return google_login("prod")
-
-
-@app.get("/api/library/mine")
-def get_my_library_prod():
-    return get_my_library("prod")
-
-
-@app.put("/api/library/mine")
-def put_my_library_prod():
-    return put_my_library("prod")
-
-
-@app.post("/api/dev/auth/signup")
-def signup_dev():
-    return signup("dev")
-
-
-@app.post("/api/dev/auth/login")
-def login_dev():
-    return login("dev")
-
-
-@app.post("/api/dev/auth/logout")
-def logout_dev():
-    return logout("dev")
-
-
-@app.get("/api/dev/auth/me")
-def me_dev():
-    return me("dev")
-
-
-@app.post("/api/dev/auth/google")
-def google_login_dev():
-    return google_login("dev")
-
-
-@app.get("/api/dev/library/mine")
-def get_my_library_dev():
-    return get_my_library("dev")
-
-
-@app.put("/api/dev/library/mine")
-def put_my_library_dev():
-    return put_my_library("dev")
-
-
 @app.get("/api/health")
 def health():
     return jsonify(status="ok")
 
 
-# ---- static frontend + share pages ----
+# ---- static frontend ----
 # The frontend used to be a separate static site on GitHub Pages, which could never
 # vary its HTML per-URL - see chess-library-api/CLAUDE.md for why that made per-game
 # WhatsApp previews impossible and why the whole site now lives here instead.
@@ -763,14 +675,7 @@ def health():
 
 @app.get("/")
 def serve_root():
-    resp = app.response_class(read_static_html("prod"), mimetype="text/html")
-    resp.headers["Cache-Control"] = "no-cache"
-    return resp
-
-
-@app.get("/dev/")
-def serve_dev_root():
-    resp = app.response_class(read_static_html("dev"), mimetype="text/html")
+    resp = app.response_class(read_static_html(), mimetype="text/html")
     resp.headers["Cache-Control"] = "no-cache"
     return resp
 
@@ -788,36 +693,6 @@ def serve_logos(filename):
 @app.get("/amsterdam_games.pgn")
 def serve_amsterdam_games():
     return send_from_directory(STATIC_DIR, "amsterdam_games.pgn")
-
-
-@app.post("/api/games/share")
-def create_game_share_prod():
-    return create_game_share("prod")
-
-
-@app.post("/api/dev/games/share")
-def create_game_share_dev():
-    return create_game_share("dev")
-
-
-@app.get("/g/<library_id>")
-def share_page_prod(library_id):
-    return share_page("prod", library_id)
-
-
-@app.get("/g/<library_id>/preview.png")
-def share_preview_png_prod(library_id):
-    return share_preview_png("prod", library_id)
-
-
-@app.get("/dev/g/<library_id>")
-def share_page_dev(library_id):
-    return share_page("dev", library_id)
-
-
-@app.get("/dev/g/<library_id>/preview.png")
-def share_preview_png_dev(library_id):
-    return share_preview_png("dev", library_id)
 
 
 load_piece_images()
