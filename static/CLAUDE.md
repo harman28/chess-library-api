@@ -5,14 +5,18 @@ games. No build step, no framework — one `index.html` with inline `<style>`/`<
 
 **This file's location moved.** The frontend used to be a separate repo (`chess-library`)
 deployed to GitHub Pages. It's now served directly by `chess-library-api` (this repo's
-parent directory) as `static/index.html` / `static/dev/index.html`, because GitHub Pages
-can only serve pre-existing static files and that made per-game WhatsApp link previews
-(a real board image, real player names, per link) fundamentally impossible — see the
-parent `CLAUDE.md`'s "Static frontend + single-game sharing" section for the full
-rationale and the backend side of that feature. Ships a mobile-first card/bottom-sheet UI
-alongside the original desktop table, a light/dark theme, editing tools (single + bulk
-game-metadata edit, per-move comment editing, a native date picker), username/password
-accounts, and single-game sharing with real per-game link previews.
+parent directory) as **the single file `static/index.html`**, because GitHub Pages can
+only serve pre-existing static files and that made per-game WhatsApp link previews (a
+real board image, real player names, per link) fundamentally impossible — see the parent
+`CLAUDE.md`'s "Static frontend + single-game sharing" section for the full rationale and
+the backend side of that feature. Ships a mobile-first card/bottom-sheet UI alongside the
+original desktop table, a light/dark theme, editing tools (single + bulk game-metadata
+edit, per-move comment editing, a native date picker), username/password accounts, and
+single-game sharing with real per-game link previews.
+
+**There used to be a second copy, `static/dev/index.html`, and it's gone as of
+2026-09-23** — see "Why there's only one file now" below before assuming any docs or
+muscle memory about a dev/prod file split still apply.
 
 ## Development workflow (important — follow this, don't edit static/index.html directly)
 
@@ -25,31 +29,41 @@ not this file directly. Workflow for any change:
 3. For anything behavioral, write a quick Node test using a minimal DOM stub (see below)
    or a real Playwright screenshot/emulation for visual changes. This project has been
    tested this way all along — don't skip it just because it's a "small" change.
-4. Copy to **`chess-library-api/static/dev/index.html`** (staging path, live at
-   `https://library.chessscenes.com/dev/`) first, syntax-check the copy, commit, push to
-   `chess-library-api`. Let the user review on staging (including on their actual phone)
-   before promoting.
-5. Only after explicit approval, promote to production: copy to
-   **`chess-library-api/static/index.html`**, syntax-check, commit, push. Run a full
-   regression pass (desktop + real mobile emulation, not just a resized viewport — see
-   the viewport-meta-tag lesson below) immediately before this push, since this is the
-   file real users see.
-6. Railway auto-deploys `chess-library-api` on push to `main` — **this now deploys the
-   frontend too**, since it's the same repo/service. A push here restarts the whole
-   process (API included), unlike the old GitHub Pages setup where frontend and backend
-   deployed completely independently. Don't be surprised by a brief gunicorn restart on
-   a pure-frontend change.
+4. Copy to **`chess-library-api/static/index.html`**, syntax-check the copy, commit, and
+   push to a branch merged into `staging` (**not** straight to `main`) — this is now the
+   *only* copy of the frontend, so this step doubles as both "the dev copy" and "the prod
+   copy," and staging review is what stands between a change and real users, not a
+   second file. Let the user review live at `library-staging.up.railway.app` (including
+   on their actual phone) before promoting.
+5. Only after explicit approval, merge `staging` into `main` and push to deploy to
+   production. Run a full regression pass (desktop + real mobile emulation, not just a
+   resized viewport — see the viewport-meta-tag lesson below) immediately before this
+   push, since this is what real users see next.
+6. Railway auto-deploys `chess-library-api`'s `web` service on push to `main` — **this
+   deploys the frontend too**, since it's the same repo/service. A push here restarts the
+   whole process (API included), unlike the old GitHub Pages setup where frontend and
+   backend deployed completely independently. Don't be surprised by a brief gunicorn
+   restart on a pure-frontend change. (The `chess-library-api-staging` service deploys
+   the exact same way, from the `staging` branch, to its own separate process.)
 
-**Why the dev/ split exists**: the user explicitly rejected a separate repo for staging
-("I don't like the idea of a separate repo at all"), so staging is a subpath of the same
-deployment instead. `static/dev/index.html` is allowed to be iterated on more freely;
-`static/index.html` (prod) is the one real users are on and needs the full regression pass
-before every push. **This applies to visual/content decisions too, not just code risk** —
-a push to prod containing new, never-reviewed copy or design (e.g. a first-draft favicon,
-an OG-image tagline nobody had seen yet) has been auto-blocked by the environment's own
-safety classifier mid-session for exactly this reason. Stage new copy/visual work, show it
-to the user, get explicit sign-off, *then* promote — even for things that feel "obviously
-fine."
+**Why there's only one file now**: the two-file split (`static/index.html` for real users,
+`static/dev/index.html` as a freely-iterable staging copy) was how this project could
+stage changes before Railway's separate `chess-library-api-staging` service existed —
+the user explicitly rejected a separate *repo* for staging ("I don't like the idea of a
+separate repo at all"), so a second file within the same deployment was the workaround.
+Once staging became its own Railway service deploying from its own `staging` git branch
+(and, as of 2026-09-23, its own separate database — see the parent `CLAUDE.md`'s "Prod/dev
+split" and "Staging environment" sections), the file-level split became pure redundancy:
+the same one file, reviewed on the `staging` branch's deployment before being merged to
+`main`, already gets exactly the "iterate freely, then promote after sign-off" property
+the two-file split existed to provide — just via git branches instead of file paths,
+which is also how every other part of this deploy pipeline already worked. **The
+promotion discipline itself is unchanged** — this applies to visual/content decisions
+just as much as code risk. A push to `main` containing new, never-reviewed copy or design
+(e.g. a first-draft favicon, an OG-image tagline nobody had seen yet) has been
+auto-blocked by the environment's own safety classifier mid-session for exactly this
+reason in the past. Stage new copy/visual work on `staging`, show it to the user, get
+explicit sign-off, *then* merge to `main` — even for things that feel "obviously fine."
 
 Node test harness pattern used throughout: stub `document.getElementById`, `localStorage`,
 `window` (needed for `window.addEventListener`/`matchMedia`/`scrollTo`), `history`,
@@ -77,10 +91,14 @@ node your_script.js`.
   `"untimed"` without bumping the version meant every already-cached session had games with
   the stale value baked in, and the new "Untimed" filter matched zero of them for anyone
   with an existing session.
-  `STORAGE_KEY` is also namespaced by path (`"chessLibraryData" + (location.pathname
-  .startsWith("/dev/") ? "_dev" : "")`) — `localStorage` is scoped per-*origin*, not per-path,
-  so staging and production were silently sharing the same browser storage key despite being
-  served from different URLs, until this was namespaced.
+  `STORAGE_KEY` is a plain, unsuffixed constant (`"chessLibraryData"`) — it used to be
+  namespaced by path (`+ (location.pathname.startsWith("/dev/") ? "_dev" : "")`) back
+  when staging was reached via a `/dev/` path on the same origin as prod (`localStorage`
+  is scoped per-*origin*, not per-path, so without that suffix the two would have
+  silently shared one browser storage key despite looking like separate environments).
+  As of 2026-09-23, prod (`library.chessscenes.com`) and staging
+  (`library-staging.up.railway.app`) are different origins outright, so `localStorage`
+  is already naturally separate with no suffix needed — don't reintroduce one.
   **A shared single game visited via `/g/<id>` deliberately does NOT persist to
   `STORAGE_KEY`** (`loadGames`'s `skipPersist` param, gated in `init()`'s `/g/<id>` code
   path) — this was a real bug caught while building the sharing feature: the older
@@ -222,9 +240,9 @@ node your_script.js`.
   my account's data back". A 404 on login's pull (fresh account, nothing saved yet) is a
   no-op, not a reset — it deliberately does not clear locally-loaded data, to avoid
   destroying an anonymous session someone was just trying out.
-  Session token lives in `localStorage` (`chessLibraryAuthToken` / `_dev` suffix, same
-  path-based namespacing as `STORAGE_KEY`) and is sent as `Authorization: Bearer <token>`,
-  not a cookie. On load, `checkAuthOnLoad()` validates the stored token against
+  Session token lives in `localStorage` (`chessLibraryAuthToken`, a plain unsuffixed
+  constant — same reasoning as `STORAGE_KEY` above) and is sent as `Authorization:
+  Bearer <token>`, not a cookie. On load, `checkAuthOnLoad()` validates the stored token against
   `/api/auth/me` before trusting it. Every mutation still calls `saveToStorage()` exactly as
   before (instant local save is unchanged/preserved), which now also calls
   `scheduleAuthSync()` — a 1.5s-debounced `PUT /api/library/mine` that only fires when
@@ -274,9 +292,10 @@ node your_script.js`.
   silently beat a lower-specificity `.logo-light{display:none}`, showing both variants
   stacked regardless of theme) — scope both to the same specificity, e.g. `.logo-h1
   .logo-dark` / `.logo-h1 .logo-light`.
-- **Social preview** (`og:image`/`twitter:image` etc. in `<head>`): the root `/` and `/dev/`
-  pages point to the single static `og-image.png` (1200×630, tracked in `static/`) — this
-  part is unchanged and still deliberately one fixed image for the site itself. **This is no
+- **Social preview** (`og:image`/`twitter:image` etc. in `<head>`): the root `/` page
+  (on prod and on staging alike — one file, served by both) points to the single static
+  `og-image.png` (1200×630, tracked in `static/`) — this part is unchanged and still
+  deliberately one fixed image for the site itself. **This is no
   longer true for shared single games**: `/g/<id>` gets its own per-game `<meta>` tags and
   preview image, rendered server-side per request (see the parent `CLAUDE.md`) — don't
   assume "one static set of tags covers every URL" anymore, that assumption is exactly what
@@ -404,11 +423,13 @@ sign to question the constraint being routed around, not to polish the workaroun
 ## Deployment safety
 
 Real users are actively using the live site. Standing agreement: test locally first (syntax
-+ functional + visual, using real mobile emulation for anything mobile-facing), stage in
-`static/dev/` for anything substantial (a redesign *or* new copy/visual content), get
-explicit approval, then promote to `static/index.html`. Don't push half-verified changes,
-and don't push unreviewed content/design straight to prod even if it feels safe. Don't
-babysit Railway deploys — a `curl` check against the live URL is enough, no retry-looping.
++ functional + visual, using real mobile emulation for anything mobile-facing), stage on
+the `staging` git branch (deploys to `library-staging.up.railway.app`, its own service and
+database — see the parent `CLAUDE.md`) for anything substantial (a redesign *or* new
+copy/visual content), get explicit approval, *then* merge `staging` into `main` to promote.
+Don't push half-verified changes, and don't push unreviewed content/design straight to
+`main` even if it feels safe. Don't babysit Railway deploys — a `curl` check against the
+live URL is enough, no retry-looping.
 
 ## Things the user has explicitly pushed back on (don't repeat)
 
