@@ -96,7 +96,9 @@ h1{font-size:1.25rem;margin:0 0 1.5rem}.count{color:var(--accent);font-weight:60
 .selection-bar.hidden{display:none}
 .sel-cancel{width:2.3rem;height:2.3rem;flex:0 0 auto;display:flex;align-items:center;justify-content:center;background:var(--surface-alt);color:var(--text);border:1px solid var(--border);border-radius:.25rem;cursor:pointer;font-size:1rem;padding:0}
 .sel-cancel:hover{background:var(--border)}
-.sel-count{font-size:.85rem;color:var(--text-dim);white-space:nowrap}
+.sel-count{font:inherit;font-size:.85rem;color:var(--text-dim);white-space:nowrap;background:none;border:none;padding:0;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.sel-count:hover{color:var(--text)}
+.sel-count.active{color:var(--accent);font-weight:600}
 .sel-group{display:flex;height:2.3rem;border:1px solid var(--border);border-radius:.25rem;overflow:hidden;flex:0 0 auto;margin-left:auto}
 .sel-group button{background:var(--surface-alt);border:none;color:var(--text);width:2.6rem;height:100%;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
 .sel-group button:not(:last-child){border-right:1px solid var(--border)}
@@ -388,7 +390,7 @@ body.sheet-open .game-sheet{transform:translateY(0)}
     </div>
     <div class="selection-bar hidden" id="selectionBar">
       <button id="cancelSelectionBtn" type="button" class="sel-cancel" aria-label="Cancel selection" title="Cancel">✕</button>
-      <span class="sel-count" id="selCount">0 selected</span>
+      <button class="sel-count" id="selCount" type="button" title="Show only your selected games, regardless of search/filters">0 selected</button>
       <div class="sel-group">
         <button id="bulkEditBtn" type="button" aria-label="Edit selected" title="Edit selected">✎</button>
         <button id="shareSelectedBtn" type="button" aria-label="Share selected" title="Share selected"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg></button>
@@ -1046,6 +1048,14 @@ function createChessWidget(container, g){
 }
 
 let games = []; let playerName = ""; let selected = new Set(); let activeFilters = new Set(["all"]); let selectionMode = null; let searchQuery = "";
+// True while the "N selected" counter has been clicked to review the current cross-search
+// selection - shows only selected games, ignoring searchQuery/activeFilters, so a selection
+// built up across several different searches (e.g. picking a few games from each of three
+// different opponents in turn) doesn't look "lost" just because the most recent search only
+// matches some of what's already been picked. Reset whenever selection starts/stops, or the
+// moment the user types a new search (typing implies they want to search again, not keep
+// reviewing the selection).
+let showSelectedOnly = false;
 // True right after viewing someone else's shared single game via /g/<id> — that view
 // borrows the sharer's playerName just to render/classify the game, but it isn't the
 // visitor's own name. Cleared by any path that sets a name the visitor actually chose.
@@ -1359,9 +1369,9 @@ function render(){
     +`<th></th>`;
   document.getElementById("selectAll").addEventListener("change", onSelectAllChange);
   const tbody=document.getElementById("rows"); tbody.innerHTML="";
-  const filtered=games.filter(g=>{ if(!gameMatchesSearch(g)) return false; if(activeFilters.has("all")) return true; const c=activeFilters.has("white")||activeFilters.has("black"); const o=activeFilters.has("wins")||activeFilters.has("losses")||activeFilters.has("draws"); const s=activeFilters.has("blitz")||activeFilters.has("rapid")||activeFilters.has("classical")||activeFilters.has("untimed");
+  const filtered=games.filter(g=>{ if(showSelectedOnly) return selected.has(g.idx); if(!gameMatchesSearch(g)) return false; if(activeFilters.has("all")) return true; const c=activeFilters.has("white")||activeFilters.has("black"); const o=activeFilters.has("wins")||activeFilters.has("losses")||activeFilters.has("draws"); const s=activeFilters.has("blitz")||activeFilters.has("rapid")||activeFilters.has("classical")||activeFilters.has("untimed");
     if(c&&!activeFilters.has(g.color)) return false; if(o&&!activeFilters.has(g.outcome)) return false; if(s&&!activeFilters.has(g.speed)) return false; return true; });
-  document.getElementById("playerDisplay").textContent = filtered.length===games.length ? "Games ("+games.length+")" : "Games ("+filtered.length+"/"+games.length+")";
+  document.getElementById("playerDisplay").textContent = showSelectedOnly ? "Showing "+filtered.length+" selected" : (filtered.length===games.length ? "Games ("+games.length+")" : "Games ("+filtered.length+"/"+games.length+")");
   const empty=document.getElementById("emptyState");
   if(filtered.length===0){ empty.textContent="no games match"; empty.classList.remove("hidden"); } else { empty.classList.add("hidden"); }
   filtered.forEach((g,i)=>{
@@ -1790,11 +1800,11 @@ document.querySelectorAll("#filters button").forEach((btn)=>{ btn.addEventListen
     if(!wasActive){ btn.classList.add("active"); } else { btn.classList.remove("active"); }
     if(activeFilters.size===0){document.querySelector("#filters button[data-filter='all']").classList.add("active");activeFilters.add("all");}
   }
-  syncFiltersFromDOM(); render(); }); });
+  syncFiltersFromDOM(); if(showSelectedOnly){ showSelectedOnly=false; updateSelCount(); } render(); }); });
 function updateSearchClearVisibility(){
   document.querySelector(".search-wrap").classList.toggle("has-value", document.getElementById("searchInput").value.length>0);
 }
-document.getElementById("searchInput").addEventListener("input",(e)=>{ searchQuery=e.target.value.trim(); render(); updateSearchClearVisibility(); });
+document.getElementById("searchInput").addEventListener("input",(e)=>{ searchQuery=e.target.value.trim(); if(showSelectedOnly){ showSelectedOnly=false; updateSelCount(); } render(); updateSearchClearVisibility(); });
 document.getElementById("searchClearBtn").addEventListener("click",()=>{
   const input=document.getElementById("searchInput");
   input.value=""; searchQuery=""; render(); updateSearchClearVisibility(); input.focus();
@@ -1807,10 +1817,14 @@ function updateActionButtons(){
   document.getElementById("shareSelectedBtn").disabled = noGames;
 }
 function updateSelCount(){
-  document.getElementById("selCount").textContent = selected.size+" selected";
+  const btn=document.getElementById("selCount");
+  btn.textContent = showSelectedOnly ? "← "+selected.size+" selected" : selected.size+" selected";
+  btn.classList.toggle("active", showSelectedOnly);
+  btn.title = showSelectedOnly ? "Back to your search/filters" : "Show only your selected games, regardless of search/filters";
 }
 function enterSelectionMode(){
   selectionMode=true;
+  showSelectedOnly=false;
   document.getElementById("table").classList.add("selecting");
   document.getElementById("mobileList").classList.add("selecting");
   document.getElementById("mobileSelectAllRow").classList.add("selecting");
@@ -1822,6 +1836,7 @@ function enterSelectionMode(){
 }
 function exitSelectionMode(){
   selectionMode=null;
+  showSelectedOnly=false;
   document.getElementById("table").classList.remove("selecting");
   document.getElementById("mobileList").classList.remove("selecting");
   document.getElementById("mobileSelectAllRow").classList.remove("selecting");
@@ -1837,7 +1852,14 @@ function exitSelectionMode(){
   updateActionButtons();
   updateSelCount();
   updateToolbarHeightVar();
+  render();
 }
+document.getElementById("selCount").addEventListener("click",()=>{
+  if(!showSelectedOnly && selected.size===0) return;
+  showSelectedOnly=!showSelectedOnly;
+  updateSelCount();
+  render();
+});
 function buildPgnForGames(list){ if(!list.length) return "";
   return list.map(g=>{ const h=g.headers||{};
     const lines=CORE_TAG_ORDER.map(t=>"["+t+" \""+esc(h[t]||"")+"\"]");
@@ -1867,7 +1889,6 @@ document.getElementById("deleteBtn").addEventListener("click",()=>{
   if(!confirm("Delete "+checkedCount+" selected game"+(checkedCount===1?"":"s")+"? This cannot be undone.")) return;
   games=games.filter(g=>!selected.has(g.idx));
   exitSelectionMode();
-  render();
   saveToStorage();
 });
 let uploadedText = "";
