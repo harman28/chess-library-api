@@ -50,6 +50,8 @@
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;margin:2rem;background:var(--bg);color:var(--text)}
 h1{font-size:1.25rem;margin:0 0 1.5rem}.count{color:var(--accent);font-weight:600}
 .page-header{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:1.5rem}
+.team-lib-banner{display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;background:var(--surface-alt);border:1px solid var(--accent);border-radius:.4rem;padding:.6rem .9rem;margin-bottom:1.5rem;font-size:.85rem;color:var(--text-dim)}
+.team-lib-status{color:var(--text-faint);font-size:.78rem;white-space:nowrap}
 .logo-h1{margin:0;line-height:0}
 .logo-h1 img{height:3.4rem;width:auto}
 .logo-h1 .logo-dark{display:block}
@@ -329,6 +331,10 @@ body.sheet-open .game-sheet{transform:translateY(0)}
   </div>
 </div>
 </div>
+<div class="team-lib-banner hidden" id="teamLibraryBanner">
+  <span>Shared Team Library &mdash; anyone with this link can view and add games, no login needed.</span>
+  <span class="team-lib-status" id="teamLibraryStatus"></span>
+</div>
 <div class="landing" id="landing">
 <div class="landing-inner">
 <div class="hero">
@@ -347,6 +353,9 @@ body.sheet-open .game-sheet{transform:translateY(0)}
 <button id="continueBtn" type="button" disabled>Continue</button>
 <div class="landing-sep"><span>or try a demo</span></div>
 <button id="tryDemoBtn" type="button" class="primary">Try a Demo</button>
+<div class="landing-sep"><span>or</span></div>
+<button id="createTeamLibBtn" type="button">Create a Shared Team Library</button>
+<div style="color:var(--text-faint);font-size:.8rem">A new, empty library at a permanent link, no login needed &mdash; share it with your team and anyone with the link can add games.</div>
 </div>
 <div id="stepConfirm" class="hidden">
 <div id="guessText" style="color:var(--text-dim);font-size:.9rem"></div>
@@ -1081,7 +1090,10 @@ function parsePGN(text){
   return blocks;
 }
 function classify(game, name){ const r=game.headers.Result; const w=game.headers.White||""; const b=game.headers.Black||""; const low=name.toLowerCase();
-  const isWhite=w.toLowerCase().indexOf(low)!==-1; const isBlack=b.toLowerCase().indexOf(low)!==-1;
+  // An empty name (a team library has no single "me") must never match - "".indexOf("")
+  // is 0 in JS, i.e. found, which would otherwise make isWhite/isBlack both true for
+  // every game and silently mislabel every decisive result as a "win".
+  const isWhite=!!low && w.toLowerCase().indexOf(low)!==-1; const isBlack=!!low && b.toLowerCase().indexOf(low)!==-1;
   let color="other"; if(isWhite&&!isBlack) color="white"; else if(isBlack&&!isWhite) color="black"; else if(isWhite&&isBlack) color="other";
   let outcome="other"; if(r==="1/2-1/2") outcome="draws"; else if(r==="1-0") outcome=isWhite?"wins":(isBlack?"losses":"other"); else if(r==="0-1") outcome=isBlack?"wins":(isWhite?"losses":"other");
   return {color,outcome};
@@ -1309,7 +1321,15 @@ function loadGames(pgnText, name, skipPersist){
 // (scoped per-origin already) can't collide between them without any extra suffix.
 const STORAGE_KEY="chessLibraryData";
 const SCHEMA_VERSION=5;
-function saveToStorage(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify({version:SCHEMA_VERSION, playerName, games, columnState:{order:columnState.order, visible:[...columnState.visible]}, lightModeEnabled})); }catch(_){} scheduleAuthSync(); }
+function saveToStorage(){
+  // A team library's games belong to whoever else has the link, not to this visitor's own
+  // personal collection - never let it land in this browser's own saved library.
+  if(!teamLibraryId){
+    try{ localStorage.setItem(STORAGE_KEY, JSON.stringify({version:SCHEMA_VERSION, playerName, games, columnState:{order:columnState.order, visible:[...columnState.visible]}, lightModeEnabled})); }catch(_){}
+  }
+  scheduleAuthSync();
+  scheduleTeamLibrarySync();
+}
 
 const KNOWN_HEADER_ORDER=['Site','Round','ECO','WhiteElo','BlackElo','TimeControl','Termination','Opening','Variation'];
 const KNOWN_KEY_FOR_HEADER={Site:'site',Round:'round',ECO:'eco',WhiteElo:'whiteelo',BlackElo:'blackelo',TimeControl:'time',Termination:'term',Opening:'opening',Variation:'variation'};
@@ -1971,6 +1991,20 @@ Mate."} 0-1
 document.getElementById("tryDemoBtn").addEventListener("click",()=>{
   loadGames(DEMO_PGN, "Demo");
 });
+document.getElementById("createTeamLibBtn").addEventListener("click", async ()=>{
+  const btn=document.getElementById("createTeamLibBtn");
+  const oldLabel=btn.textContent;
+  btn.disabled=true; btn.textContent="Creating…";
+  try{
+    const res=await fetch(API_BASE+API_LIBRARIES_PATH+"/new", {method:"POST"});
+    if(!res.ok) throw new Error("failed");
+    const data=await res.json();
+    location.href=location.origin+"/team/"+data.id;
+  }catch(_){
+    alert("Couldn't create a shared library right now. Please try again in a moment.");
+    btn.disabled=false; btn.textContent=oldLabel;
+  }
+});
 document.getElementById("pgnUpload").addEventListener("change",async (e)=>{
   const files=[...e.target.files];
   uploadedText="";
@@ -2072,6 +2106,12 @@ const API_LIBRARY_MINE_PATH="/api/library/mine";
 const API_GAME_SHARE_PATH="/api/games/share";
 const AUTH_TOKEN_KEY="chessLibraryAuthToken";
 let authToken=null; let authUsername=null; let authMode="login"; let authSyncTimer=null;
+// Set only while viewing a shared team library (/team/<id>) - see loadTeamLibrary(). Every
+// edit auto-saves back to this same id (scheduleTeamLibrarySync, below) so any teammate who
+// opens the same link afterward sees the latest state; there's no login and no per-account
+// row, just the id itself as the access control, same trust model as this app's existing
+// anonymous library links.
+let teamLibraryId=null; let teamLibrarySyncTimer=null;
 function updateAccountUI(){
   document.getElementById("accountBtnLabel").textContent=
     authUsername ? authUsername : (games.length ? "Save My Library" : "Log In");
@@ -2238,10 +2278,16 @@ async function submitAuthForm(){
     localStorage.setItem(AUTH_TOKEN_KEY, authToken);
     closeAuthModal();
     updateAccountUI();
-    if(authMode==="signup"){
-      if(games.length) await syncLibraryToAccount();
-    } else {
-      await pullLibraryFromAccount();
+    // A team library's games belong to whoever else has the link, not to whichever
+    // visitor happens to log in while looking at it - logging in here should only
+    // authenticate, never push these shared games into the new/existing account, and
+    // never swap this view over to that account's own separate library mid-session.
+    if(!teamLibraryId){
+      if(authMode==="signup"){
+        if(games.length) await syncLibraryToAccount();
+      } else {
+        await pullLibraryFromAccount();
+      }
     }
   }catch(err){
     showAuthError("Something went wrong. Please try again.");
@@ -2277,6 +2323,26 @@ async function syncLibraryToAccount(){
     });
   }catch(_){}
 }
+function scheduleTeamLibrarySync(){
+  if(!teamLibraryId) return;
+  clearTimeout(teamLibrarySyncTimer);
+  teamLibrarySyncTimer=setTimeout(syncTeamLibrary, 1500);
+}
+async function syncTeamLibrary(){
+  if(!teamLibraryId) return;
+  const banner=document.getElementById("teamLibraryStatus");
+  try{
+    const pgn=buildPgnForGames(games);
+    const res=await fetch(API_BASE+API_LIBRARIES_PATH+"/"+encodeURIComponent(teamLibraryId), {
+      method:"PUT",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({playerName, pgn})
+    });
+    if(banner) banner.textContent = res.ok ? "Saved to this shared link" : "Couldn't save - try again";
+  }catch(_){
+    if(banner) banner.textContent="Couldn't save - try again";
+  }
+}
 async function checkAuthOnLoad(){
   const stored=localStorage.getItem(AUTH_TOKEN_KEY);
   if(!stored) return false;
@@ -2288,6 +2354,22 @@ async function checkAuthOnLoad(){
     updateAccountUI();
     return true;
   }catch(_){ return false; }
+}
+async function loadTeamLibrary(id){
+  try{
+    const res=await fetch(API_BASE+API_LIBRARIES_PATH+"/"+encodeURIComponent(id));
+    if(!res.ok) return false;
+    const data=await res.json();
+    teamLibraryId=id;
+    // A team library is shared state, not this visitor's own - never persisted to their
+    // own localStorage (see saveToStorage's teamLibraryId guard); skipPersist here just
+    // avoids an unnecessary sync-back to the server before anything has actually changed.
+    loadGames(data.pgn||"", data.playerName||"Team Library", true);
+    document.getElementById("teamLibraryBanner").classList.remove("hidden");
+    return true;
+  }catch(err){
+    return false;
+  }
 }
 async function loadFromRemoteLibrary(id){
   try{
@@ -2385,6 +2467,12 @@ function restoreFromStorage(){
     const ok=await loadSharedGame(sharedMatch[1]);
     if(ok) return;
     alert("Couldn't find that shared game.");
+  }
+  const teamMatch=location.pathname.match(/^\/team\/([^/]+)\/?$/);
+  if(teamMatch){
+    const ok=await loadTeamLibrary(teamMatch[1]);
+    if(ok) return;
+    alert("Couldn't find that shared team library. The link may be mistyped.");
   }
   const libId=new URLSearchParams(location.search).get("lib");
   if(libId){
