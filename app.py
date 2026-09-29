@@ -844,6 +844,13 @@ def serve_commit_debug():
         lines.append(f"git_rev_parse rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}")
     except Exception as e:
         lines.append(f"git_rev_parse_error={e!r}")
+    lines.append("---env vars (names only, values redacted for anything secret-looking)---")
+    secretish = ("DATABASE", "PASSWORD", "SECRET", "TOKEN", "KEY", "CRED")
+    for k in sorted(os.environ):
+        v = os.environ[k]
+        if any(s in k.upper() for s in secretish):
+            v = "<redacted>"
+        lines.append(f"{k}={v}")
     return app.response_class("\n".join(lines) + "\n", mimetype="text/plain")
 
 
