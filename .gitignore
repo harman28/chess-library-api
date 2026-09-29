@@ -2,7 +2,3 @@ __pycache__/
 *.pyc
 .env
 venv/
-# Stamped by railway.json's preDeployCommand on every deploy - never hand-edit or commit
-# a specific value, since it would immediately go stale (and there's a chicken-and-egg
-# problem committing a file whose content is supposed to be *this* commit's own hash).
-static/commit.txt
