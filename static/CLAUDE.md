@@ -257,7 +257,7 @@ node your_script.js`.
   Identity Services script or calls `google.accounts.id.initialize()`, since there's nothing
   to configure it with yet. Don't half-wire this further until the Client ID exists.
 - **Single-game sharing**: `shareGame(game, btn)` POSTs `buildPgnForGames([game])` to
-  `/api/(dev/)games/share`, shows the resulting `/g/<id>` link in `#shareGameModal` (reuses
+  `/api/games/share`, shows the resulting `/g/<id>` link in `#shareGameModal` (reuses
   `.save-link-box`/`.save-link-actions` styling). Entry points: `.share-game-btn` in the
   desktop expanded row's `.pgnwrap-actions`, and `#sheetShareBtn` in the mobile sheet header
   — both next to the existing edit/copy-PGN buttons, since it's a deliberate per-game
@@ -269,6 +269,27 @@ node your_script.js`.
   off GitHub Pages, the escaping requirement, the piece-image rasterization approach).
   The full regular app is what's shown at `/g/<id>` — not a stripped-down viewer — per
   explicit user direction ("why would it be minimal? it can be the same as what I use").
+- **Team libraries** (`/team/<id>`, added 2026-09-29 — see the parent `CLAUDE.md`'s "Team
+  libraries" section for the full backend-side design and why it's safe to allow
+  unauthenticated writes here): `teamLibraryId` is the one flag that changes everything
+  else's behavior while set — `saveToStorage()` skips `localStorage` entirely (this
+  visitor's own personal library must never absorb someone else's shared games), fires
+  `scheduleTeamLibrarySync()` (a 1.5s-debounced `PUT /api/libraries/<id>`, no auth,
+  structurally identical to `scheduleAuthSync()`/`syncLibraryToAccount()` for logged-in
+  accounts) instead of/alongside `scheduleAuthSync()`, and `submitAuthForm()` skips both
+  `syncLibraryToAccount()` and `pullLibraryFromAccount()` so logging in mid-session can't
+  cross-contaminate the shared view with a personal account or vice versa. `loadTeamLibrary
+  (id)` (called from `init()` on a `/team/<id>` path match) fetches the current state via
+  the same `GET /api/libraries/<id>` the anonymous-link flow already uses, then calls
+  `loadGames(pgn, playerName, true)` — `skipPersist=true` here isn't for privacy the way it
+  is on the single-shared-game view, just to avoid an immediately-redundant sync-back
+  before anything has actually changed. `#teamLibraryBanner`/`#teamLibraryStatus` (shown/
+  updated only in this mode) name the trust model up front and confirm each save, so
+  "changes are visible to anyone with this link" is never a silent surprise. Creating one:
+  `#createTeamLibBtn` on the landing page POSTs `/api/libraries/new` and navigates to the
+  id it gets back — the same API any other project should call to mint links
+  programmatically (see parent `CLAUDE.md`), and the same underlying action `GET /team/new`
+  performs server-side for a plain, JS-free bookmarkable link.
 - **`API_BASE` is `""` (same-origin)**, not a hardcoded cross-origin Railway URL — frontend
   and API are the same process now. If you ever see a hardcoded `chess-library-api.up
   .railway.app` reappear anywhere in this file, that's a regression from before the

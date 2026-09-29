@@ -8,7 +8,7 @@ import chess
 import chess.pgn
 import psycopg2
 import psycopg2.pool
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, redirect, send_from_directory
 from flask_cors import CORS
 from PIL import Image, ImageDraw
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -168,6 +168,82 @@ def get_library(library_id):
 
     player_name, pgn = row
     return jsonify(playerName=player_name, pgn=pgn)
+
+
+# ---- team libraries ----
+# A team library is an ordinary anonymous `libraries` row (no user_id) that additionally
+# supports being updated in place by anyone who has its id, rather than only ever being
+# read - same trust model as the id itself (an unlisted, hard-to-guess link is the only
+# access control, same as a Lichess study or an unlisted Google Doc set to "anyone with
+# the link can edit"), just extended from read-only to read-write.
+#
+# Three ways to get a new, empty one, all funneling through the same insert:
+#   1. The "Create a Shared Team Library" button on the site's own landing page - calls
+#      #2 (the JSON API) from the frontend and navigates to the id it gets back.
+#   2. POST /api/libraries/new - the API. Returns {id}. This is what any other project
+#      (this user's or otherwise) should call to mint library links programmatically -
+#      add the calling origin to ALLOWED_ORIGIN if it's called from that project's own
+#      frontend JS (CORS only applies browser-side; a server-to-server call needs nothing
+#      added here).
+#   3. GET /team/new - a plain, bookmarkable/embeddable link with no JS or JSON involved:
+#      visiting it mints a new library and 302s straight to its permalink. Meant for
+#      places a raw <a href> is all that's available (a README, a pinned chat message,
+#      another app's own static markup).
+# All three hand out a stable id up front, before any games exist, so the link itself is
+# what gets shared and is what teammates keep revisiting - not a fresh id generated after
+# the fact from a snapshot, the way the existing "Save My Library" flow works.
+
+
+def _new_empty_library_id():
+    library_id = secrets.token_urlsafe(ID_BYTES)
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO libraries (id, player_name, pgn) VALUES (%s, %s, %s)",
+                (library_id, "Team Library", ""),
+            )
+        conn.commit()
+    finally:
+        put_conn(conn)
+    return library_id
+
+
+@app.post("/api/libraries/new")
+def create_empty_library():
+    return jsonify(id=_new_empty_library_id()), 201
+
+
+@app.get("/team/new")
+def new_team_library_redirect():
+    library_id = _new_empty_library_id()
+    return redirect(f"/team/{library_id}")
+
+
+@app.put("/api/libraries/<library_id>")
+def update_library(library_id):
+    data = request.get_json(silent=True) or {}
+    player_name = (data.get("playerName") or "").strip()
+    pgn = data.get("pgn") or ""
+
+    if len(pgn.encode("utf-8")) > MAX_PGN_BYTES:
+        return jsonify(error="pgn is too large"), 413
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE libraries SET player_name = %s, pgn = %s, updated_at = now() WHERE id = %s",
+                (player_name, pgn, library_id),
+            )
+            updated = cur.rowcount > 0
+        conn.commit()
+    finally:
+        put_conn(conn)
+
+    if not updated:
+        return jsonify(error="not found"), 404
+    return jsonify(status="ok")
 
 
 # ---- single-game sharing ----
@@ -675,6 +751,17 @@ def health():
 
 @app.get("/")
 def serve_root():
+    resp = app.response_class(read_static_html(), mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.get("/team/<library_id>")
+def serve_team_library(library_id):
+    # Same page as "/" - the frontend's own init() detects the /team/<id> path client-side
+    # and loads that library's games via GET /api/libraries/<id>. No per-library <meta>
+    # injection here (unlike /g/<id>'s share_page) - a team library doesn't have a single
+    # game's position/players to preview, so it just gets the site's one generic OG card.
     resp = app.response_class(read_static_html(), mimetype="text/html")
     resp.headers["Cache-Control"] = "no-cache"
     return resp

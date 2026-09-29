@@ -38,6 +38,25 @@ Anonymous libraries (unchanged):
   fields and a 5MB payload cap (413 if exceeded).
 - `GET /api/libraries/<id>` — `{playerName, pgn}` (200) or `{"error": "not found"}` (404).
 
+Team libraries (see "Team libraries" below for full design rationale):
+- `POST /api/libraries/new` — no body → `{id}` (201). Creates an empty `libraries` row
+  (`player_name="Team Library"`, `pgn=""`). This is **the** API for minting a new shared
+  library link programmatically — any project, this user's or otherwise, should call this
+  rather than `POST /api/libraries` (which requires non-empty `pgn` and was designed for
+  "save my current library," not "hand me a blank one to build up"). A caller running in
+  its own frontend JS needs its origin added to `ALLOWED_ORIGIN` (CORS only restricts
+  browser-side calls); a server-to-server call needs nothing added here.
+- `PUT /api/libraries/<id>` — body `{playerName, pgn}` → `{"status":"ok"}` (200) or
+  `{"error":"not found"}` (404). **No auth** — same trust model as `GET`, the id itself is
+  the only access control. This is what turns an anonymous library from a read-only
+  snapshot into a shared, live-editable one: unlike `POST /api/libraries` (always inserts
+  a new row/new id), this updates the *same* row in place, so the link a team was given
+  keeps working and keeps showing the latest state no matter how many times it's edited.
+- `GET /team/new` — no JSON, no JS: creates a new empty library the same way as
+  `POST /api/libraries/new`, then 302-redirects to `/team/<id>`. A plain link meant for
+  anywhere only a raw `<a href>` is available (a README, a pinned chat message, another
+  app's own markup) — visiting it *is* the act of creating a library.
+
 Accounts:
 - `POST /api/auth/signup` — body `{username, password}` → `{token, username}` (201).
   Username must match `^[A-Za-z0-9_.\-]{3,32}$`; password 8–128 chars. Username
@@ -148,6 +167,68 @@ every deployment's share links are correct for wherever they were actually creat
 same instinct as this user's other projects (e.g. `tournament`'s `generateMetadata()`/
 `opengraph-image.tsx`, which resolve their own absolute URLs from the incoming request
 rather than a hardcoded domain, for the same reason).
+
+## Team libraries
+
+Added 2026-09-29: a new, empty library at a permanent link, no login, that anyone who has
+the link can view **and add to** — meant for a small group (a team, a training group)
+building up a shared collection together, without anyone needing an account. Three ways to
+create one, all funneling through the same `_new_empty_library_id()` insert (see
+"Endpoints" above for the exact routes): the landing page's own "Create a Shared Team
+Library" button (the primary, discoverable path for a visitor to this site), the
+`POST /api/libraries/new` API (for programmatic use, including from this user's other
+projects), and the plain `GET /team/new` redirect link (for anywhere only a raw URL can go).
+
+- **Same trust model as every other anonymous link in this app, just extended from
+  read-only to read-write.** An anonymous `libraries` row was already "possession of the
+  id is the only access control" for reading (`GET /api/libraries/<id>`); a team library
+  is the same row, with `PUT /api/libraries/<id>` (no auth) added so it can be *updated*
+  in place by anyone with the link too — same idea as an unlisted Google Doc set to
+  "anyone with the link can edit," not a new paradigm for this app.
+- **`/team/<id>` is a real Flask route** (`serve_team_library`), not just a client-side
+  path — unlike `?lib=<id>` (a query string on the already-served `/`), a path segment
+  needs its own server-side route or Flask 404s before any frontend JS runs. It serves the
+  exact same `static/index.html` as `/`; the frontend's own `init()` detects the
+  `/team/<id>` path and does the actual data loading via `GET /api/libraries/<id>`. No
+  per-library `<meta>` injection the way `/g/<id>`'s `share_page` does for a single game —
+  a team library has no one position/pair of players to preview, so it just gets the
+  site's one generic OG card.
+- **Auto-saves on every edit, debounced, exactly like the existing account-sync
+  pattern** (`scheduleTeamLibrarySync()`/`syncTeamLibrary()` mirror
+  `scheduleAuthSync()`/`syncLibraryToAccount()` almost line for line — same 1.5s debounce,
+  same "just PUT the whole rebuilt PGN back" approach). This is genuinely last-write-wins,
+  not real-time collaborative editing (no websockets, no merge/conflict resolution) — fine
+  for "a few teammates add games to a shared pile over time," not the right tool for two
+  people editing the exact same moment simultaneously. The banner shown while viewing one
+  (`#teamLibraryBanner`) says as much ("anyone with this link can view and add games, no
+  login needed") and its status line (`#teamLibraryStatus`) confirms each save so this
+  isn't a silent, easy-to-doubt background operation.
+- **Never touches the visitor's own personal library.** `saveToStorage()` skips writing to
+  `STORAGE_KEY`/`localStorage` entirely whenever `teamLibraryId` is set (same instinct as
+  the existing `isSharedGameGuest` guard on the single-shared-game view, generalized) — a
+  team library's games are shared state belonging to whoever else has the link, not this
+  visitor's own collection, and must never silently merge into or overwrite it.
+- **Logging in or signing up while viewing a team library only authenticates — it does
+  not touch the team library or the account.** `submitAuthForm()` skips both
+  `syncLibraryToAccount()` (would otherwise push the team's shared games into a brand-new
+  account on signup) and `pullLibraryFromAccount()` (would otherwise silently swap the
+  view over to that account's own separate library mid-session, while still trying to sync
+  it back to the team link) whenever `teamLibraryId` is set. Caught and fixed before
+  shipping — confirmed via a real signup while viewing an active team library, checking
+  both that the team view was unaffected and that the new account's own
+  `GET /api/library/mine` still 404s (nothing leaked into it).
+- **`classify(game, name)` used to have a latent bug that this feature would have hit
+  immediately**: `"".indexOf("")` is `0` in JS (found, at the start) - so an empty
+  `name` made `isWhite`/`isBlack` both evaluate `true` for *every* game, mislabeling every
+  decisive result as a personal "win" and coloring every game "other." Unreachable through
+  the UI before now (`loadGames()`'s own "Please enter your name" gate meant `name` was
+  never actually empty), but a team library has no single "me" to classify by. Fixed by
+  short-circuiting both checks to `false` when `name` is blank, and team libraries pass a
+  neutral `"Team Library"` label (never `""`) as an extra margin - see `classify()`'s own
+  comment.
+- Existing single-game share links (`/g/<id>`) and the older `?lib=<id>` "restore my own
+  library" flow are unrelated and unchanged by any of this — a team library is a third,
+  distinct kind of link, not a replacement for either.
 
 ## Auth design notes
 
