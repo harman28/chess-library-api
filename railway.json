@@ -1,0 +1,6 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "buildCommand": "pip install -r requirements.txt && (git rev-parse HEAD > static/commit.txt 2>/dev/null || echo unknown > static/commit.txt)"
+  }
+}
