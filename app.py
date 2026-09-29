@@ -821,6 +821,32 @@ def serve_commit_txt():
     return app.response_class(DEPLOYED_COMMIT + "\n", mimetype="text/plain")
 
 
+@app.get("/commit-debug.txt")
+def serve_commit_debug():
+    # TEMPORARY - diagnosing why DEPLOYED_COMMIT resolves to "unknown" on Railway.
+    # Remove once resolved.
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    lines = [f"app_dir={app_dir}"]
+    try:
+        lines.append("listdir=" + ",".join(sorted(os.listdir(app_dir))))
+    except Exception as e:
+        lines.append(f"listdir_error={e!r}")
+    lines.append("git_dir_exists=" + str(os.path.isdir(os.path.join(app_dir, ".git"))))
+    try:
+        which = subprocess.run(["which", "git"], capture_output=True, text=True, timeout=5)
+        lines.append(f"which_git rc={which.returncode} stdout={which.stdout!r} stderr={which.stderr!r}")
+    except Exception as e:
+        lines.append(f"which_git_error={e!r}")
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=app_dir, capture_output=True, text=True, timeout=5
+        )
+        lines.append(f"git_rev_parse rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}")
+    except Exception as e:
+        lines.append(f"git_rev_parse_error={e!r}")
+    return app.response_class("\n".join(lines) + "\n", mimetype="text/plain")
+
+
 load_piece_images()
 init_db()
 
