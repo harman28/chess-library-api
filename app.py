@@ -3,7 +3,6 @@ import io
 import os
 import re
 import secrets
-import subprocess
 
 import chess
 import chess.pgn
@@ -32,30 +31,17 @@ BOARD_DARK_RGB = (0x5F, 0x78, 0x91)  # matches .cw-sq.dark
 
 
 def _resolve_deployed_commit():
-    # Read once at process start, not per-request - a Railway container's whole lifetime
-    # is one deploy, so the answer can never change while this process is running. A
-    # Railpack Python build keeps the full git checkout (including .git) in the runtime
-    # image rather than copying into a separate slim/stripped stage, so `git rev-parse`
-    # works here the same as it would at build time - no deploy-hook config needed (an
-    # earlier attempt at this used railway.json's preDeployCommand to stamp a file at
-    # deploy time; that never actually ran in practice and Railway is deprecating that
-    # config format anyway, so this reads it directly from the process's own checkout
-    # instead - simpler, and has nothing Railway-specific to go stale). Falls back to
-    # "unknown" for any environment where that assumption doesn't hold (a stripped
-    # container, or a local run from a tarball/zip export without .git).
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return "unknown"
+    # Railway injects RAILWAY_GIT_COMMIT_SHA into the runtime environment automatically
+    # for any GitHub-connected deployment - no deploy-hook config, no build script, no
+    # dependency on `git` even being installed. Confirmed the hard way: this Railpack
+    # Python runtime image has neither a `git` binary nor a `.git` directory (checked
+    # directly via a temporary debug route), so both a `railway.json` preDeployCommand
+    # (deploying git rev-parse HEAD to a file) and calling `git rev-parse` from inside the
+    # app itself silently resolve to nothing - Railpack fetches the source without a real
+    # git checkout. The env var is the one thing that's actually reliably present.
+    # Read once at process start, not per-request - a container's whole lifetime is one
+    # deploy, so the answer can never change while this process is running.
+    return os.environ.get("RAILWAY_GIT_COMMIT_SHA", "unknown")
 
 
 DEPLOYED_COMMIT = _resolve_deployed_commit()
@@ -815,9 +801,10 @@ def serve_amsterdam_games():
 
 @app.get("/commit.txt")
 def serve_commit_txt():
-    # DEPLOYED_COMMIT is resolved once at import time (below) - a poller can hit this to
-    # tell exactly which commit is actually live, without scraping the page for a marker
-    # string or needing Railway CLI/API access.
+    # DEPLOYED_COMMIT is resolved once at import time (see _resolve_deployed_commit near
+    # the top of this file) - a poller can hit this to tell exactly which commit is
+    # actually live, without scraping the page for a marker string or needing Railway
+    # CLI/API access.
     return app.response_class(DEPLOYED_COMMIT + "\n", mimetype="text/plain")
 
 
