@@ -782,6 +782,20 @@ def serve_amsterdam_games():
     return send_from_directory(STATIC_DIR, "amsterdam_games.pgn")
 
 
+@app.get("/commit.txt")
+def serve_commit_txt():
+    # Stamped by railway.json's preDeployCommand at deploy time (git rev-parse HEAD),
+    # not committed to the repo - see the .gitignore comment. A poller can hit this to
+    # tell exactly which commit is actually live, without scraping the page for a marker
+    # string or needing Railway CLI/API access. Missing locally (no such deploy step in
+    # plain `python3 app.py`) is expected, not an error - "unknown" rather than a 404 so
+    # a poller doesn't need special-case handling for local/dev use.
+    path = os.path.join(STATIC_DIR, "commit.txt")
+    if not os.path.exists(path):
+        return app.response_class("unknown\n", mimetype="text/plain")
+    return send_from_directory(STATIC_DIR, "commit.txt", mimetype="text/plain")
+
+
 load_piece_images()
 init_db()
 
