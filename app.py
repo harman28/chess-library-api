@@ -3,6 +3,7 @@ import io
 import os
 import re
 import secrets
+import subprocess
 
 import chess
 import chess.pgn
@@ -28,6 +29,36 @@ PIECES_DIR = os.path.join(STATIC_DIR, "pieces")
 BOARD_SQUARE_PX = 64
 BOARD_LIGHT_RGB = (0x8C, 0xA2, 0xB4)  # matches .cw-sq.light in the live board widget
 BOARD_DARK_RGB = (0x5F, 0x78, 0x91)  # matches .cw-sq.dark
+
+
+def _resolve_deployed_commit():
+    # Read once at process start, not per-request - a Railway container's whole lifetime
+    # is one deploy, so the answer can never change while this process is running. A
+    # Railpack Python build keeps the full git checkout (including .git) in the runtime
+    # image rather than copying into a separate slim/stripped stage, so `git rev-parse`
+    # works here the same as it would at build time - no deploy-hook config needed (an
+    # earlier attempt at this used railway.json's preDeployCommand to stamp a file at
+    # deploy time; that never actually ran in practice and Railway is deprecating that
+    # config format anyway, so this reads it directly from the process's own checkout
+    # instead - simpler, and has nothing Railway-specific to go stale). Falls back to
+    # "unknown" for any environment where that assumption doesn't hold (a stripped
+    # container, or a local run from a tarball/zip export without .git).
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+DEPLOYED_COMMIT = _resolve_deployed_commit()
 
 app = Flask(__name__)
 ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGIN", "*").split(",") if o.strip()]
@@ -784,16 +815,10 @@ def serve_amsterdam_games():
 
 @app.get("/commit.txt")
 def serve_commit_txt():
-    # Stamped by railway.json's preDeployCommand at deploy time (git rev-parse HEAD),
-    # not committed to the repo - see the .gitignore comment. A poller can hit this to
+    # DEPLOYED_COMMIT is resolved once at import time (below) - a poller can hit this to
     # tell exactly which commit is actually live, without scraping the page for a marker
-    # string or needing Railway CLI/API access. Missing locally (no such deploy step in
-    # plain `python3 app.py`) is expected, not an error - "unknown" rather than a 404 so
-    # a poller doesn't need special-case handling for local/dev use.
-    path = os.path.join(STATIC_DIR, "commit.txt")
-    if not os.path.exists(path):
-        return app.response_class("unknown\n", mimetype="text/plain")
-    return send_from_directory(STATIC_DIR, "commit.txt", mimetype="text/plain")
+    # string or needing Railway CLI/API access.
+    return app.response_class(DEPLOYED_COMMIT + "\n", mimetype="text/plain")
 
 
 load_piece_images()
