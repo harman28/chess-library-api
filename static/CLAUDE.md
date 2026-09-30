@@ -349,11 +349,41 @@ Below `≤700px` (`@media (max-width:700px)`), the table (`.table-wrap`) is repl
   you'll silently grab a hidden desktop copy instead of the visible mobile one (bit a test
   script during comment-editing development).
 - **Full-screen bottom sheet** (`#gameSheet` + `#sheetScrim`) on tapping a card: reuses the
-  same hand-rolled board widget (`createChessWidget`) as the desktop expanded row. Layout is
-  a **fixed, non-scrolling embed section on top + an independently scrolling move list
-  below** (`.sheet-embed-sticky` / `.sheet-moves`, both children of a non-scrolling flex
-  `.sheet-body`) — an earlier version had the board scroll away with the move list, making
-  it impossible to check the position while reading long annotations.
+  same hand-rolled board widget (`createChessWidget`) as the desktop expanded row, but
+  mobile-scoped CSS (`.game-sheet .cw-board` etc.) overrides its sizing/layout so the sheet
+  can give the board most of the screen. Real feedback after the board-vs-moves redesign
+  below shipped ("I don't like that my eyes need to keep jumping left and right to read the
+  comments AND see the game") plus a follow-up rapid-tap bug (the caption's variable height
+  used to sit between the board and the controls and shift them as you tapped through moves)
+  drove the current structure:
+  - `#sheetBody` (`.sheet-body`) is **one unified scroll region** — `.sheet-embed` (the board
+    + nameplates + caption, via `createChessWidget`) followed in normal flow by `.sheet-moves`
+    (the full move list). The move list is deliberately **not visible without scrolling**:
+    `openGameSheet()` measures `sheetBody.clientHeight` after the widget (and footer, see
+    below) are in place and sets that as `.sheet-embed`'s `min-height`, so the board/caption
+    always fill at least the full initial viewport and the move list starts below the fold.
+  - `.cw-controls` (the ⏮‹⇅›⏭ buttons, part of `createChessWidget`'s shared template) is
+    **moved out of the widget into `#sheetFooter`**, a separate flex sibling of `#sheetBody`
+    after the sheet's own DOM is built — not into a `position:fixed` overlay. An earlier
+    attempt pinned `.cw-controls` directly via `position:fixed` inside `.game-sheet` (which
+    works as a containing block for it), but that let the bar visually overlay/clip whatever
+    happened to scroll to the bottom of the viewport (confirmed the hard way: the caption box
+    ended up partly hidden underneath it). Giving the footer its own reserved flex row instead
+    means `#sheetBody`'s own height (and thus the `min-height` measurement above) already
+    excludes it — nothing can ever render underneath it. `openGameSheet()` clears and
+    re-populates `#sheetFooter` on every call (games are re-opened without a full page
+    reload) so reopening a different game doesn't leave a stale/duplicate controls bar behind.
+  - `.game-sheet .cw-caption` gets a fixed `height` + `overflow-y:auto` instead of the
+    default collapse-to-`display:none`-when-empty behavior used elsewhere (`.hidden` is
+    overridden to `visibility:hidden` here, keeping the box's footprint constant) — this is
+    the "comments in a fixed-size box" requirement, and it's what keeps the layout below the
+    caption from jumping as you move through moves with and without annotations (the same
+    instinct as the rapid-tap fix, just structural now that the caption no longer sits above
+    the controls at all).
+  - Move navigation's existing `scrollIntoView({block:"center"})` (shared with desktop, see
+    `highlightMove()`) now doubles as the mechanism for "reveal the moves by scrolling" —
+    tapping through moves on mobile auto-scrolls `#sheetBody` to bring the active move into
+    view even though the list starts off-screen, without any mobile-specific scroll code.
 - Closing the sheet pushes/pops a `history.pushState` entry so the Android/mobile back
   gesture closes the sheet instead of leaving the page; Escape and the scrim also close it.
 
