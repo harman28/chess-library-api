@@ -866,7 +866,6 @@ function createChessWidget(container, g){
 
   container.innerHTML = `<div class="cw-nameplate cw-nameplate-top"></div>`
     + `<div class="cw-board-wrap" tabindex="0"><div class="cw-board"><div class="cw-squares"></div><div class="cw-pieces"></div></div></div>`
-    + `<div class="cw-caption hidden"></div>`
     + `<div class="cw-nameplate cw-nameplate-bottom"></div>`
     + `<div class="cw-controls">`
     + `<button class="cw-btn cw-first" title="First move" aria-label="First move">⏮</button>`
@@ -874,7 +873,8 @@ function createChessWidget(container, g){
     + `<button class="cw-btn cw-flip" title="Flip board" aria-label="Flip board">⇅</button>`
     + `<button class="cw-btn cw-next" title="Next move" aria-label="Next move">›</button>`
     + `<button class="cw-btn cw-last" title="Last move" aria-label="Last move">⏭</button>`
-    + `</div>`;
+    + `</div>`
+    + `<div class="cw-caption hidden"></div>`;
   const squaresEl = container.querySelector(".cw-squares");
   const piecesEl = container.querySelector(".cw-pieces");
   const boardWrap = container.querySelector(".cw-board-wrap");
