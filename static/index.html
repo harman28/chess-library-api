@@ -287,13 +287,17 @@ body.sheet-open .game-sheet{transform:translateY(0)}
 .sheet-sub .ev{color:var(--link)}
 .sheet-close{margin-left:auto;flex:0 0 auto;width:2.25rem;height:2.25rem;border-radius:50%;background:var(--surface-alt);border:1px solid var(--border);display:grid;place-items:center;font-size:1.05rem;color:var(--text-dim);cursor:pointer}
 .sheet-close:hover{color:var(--text);background:var(--border)}
-.sheet-body{flex:1 1 auto;overflow:hidden;display:flex;flex-direction:column;padding:0}
-.sheet-embed-sticky{flex:0 0 auto;padding:.75rem 1rem;border-bottom:1px solid var(--border)}
-.sheet-moves{flex:1 1 auto;box-sizing:border-box;min-height:0;display:flex;flex-direction:column;gap:.4rem;padding:.75rem 1rem 1rem}
-.sheet-moves-scroll{flex:1 1 auto;overflow-y:auto;min-height:0;box-sizing:border-box}
-.game-sheet .chess-widget-wrap{width:260px;margin:0 auto}
-.game-sheet .cw-board{width:260px;height:260px}
-.game-sheet .cw-error{width:260px}
+.sheet-body{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0}
+.sheet-embed{box-sizing:border-box;padding:.75rem 1rem;border-bottom:1px solid var(--border)}
+.sheet-moves{box-sizing:border-box;padding:.75rem 1rem 1rem}
+.sheet-footer{flex:0 0 auto;box-sizing:border-box;padding:.6rem 1rem calc(.6rem + env(safe-area-inset-bottom,0px));background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -2px 10px var(--shadow)}
+.game-sheet .chess-widget-wrap{width:100%;max-width:440px;margin:0 auto}
+.game-sheet .cw-board-wrap{width:100%}
+.game-sheet .cw-board{width:100%;height:auto;aspect-ratio:1/1}
+.game-sheet .cw-error{width:100%;max-width:440px;margin:0 auto}
+.game-sheet .cw-caption{height:4.5rem;overflow-y:auto;box-sizing:border-box}
+.game-sheet .cw-caption.hidden{display:block!important;visibility:hidden}
+.sheet-footer .cw-controls{width:auto}
 .sheet-moves .move-formatted{padding-right:0}
 
 .toolbar{position:sticky;top:0;z-index:15;background:var(--bg);padding-top:.6rem;padding-bottom:.6rem;margin-left:-2rem;margin-right:-2rem;padding-left:2rem;padding-right:2rem;border-bottom:1px solid var(--border)}
@@ -458,6 +462,7 @@ body.sheet-open .game-sheet{transform:translateY(0)}
     </div>
   </div>
   <div class="sheet-body" id="sheetBody"></div>
+  <div class="sheet-footer" id="sheetFooter"></div>
 </section>
 <footer class="site-footer">A <a href="https://chessscenes.com/" target="_blank" rel="noopener noreferrer">Chess Scenes</a> project</footer>
 <div id="addGamesModal" class="modal-overlay hidden">
@@ -1483,8 +1488,13 @@ function openGameSheet(g){
   document.getElementById("sheetTitle").textContent=(g.headers.White||"")+" vs "+(g.headers.Black||"");
   document.getElementById("sheetSub").innerHTML=`<span class="ev">${esc(g.headers.Event||"")}</span> · ${esc(g.headers.Date||"")} · <span style="color:var(--result)">${esc(g.headers.Result||"")}</span>`;
   const body=document.getElementById("sheetBody");
-  body.innerHTML=`<div class="sheet-embed-sticky"><div class="chess-widget-wrap"></div></div><div class="sheet-moves"><div class="sheet-moves-scroll"><div class="move-formatted">${formatMovesWithComments(g.movetext, g.idx)}</div></div></div>`;
+  const footer=document.getElementById("sheetFooter");
+  body.innerHTML=`<div class="sheet-embed"><div class="chess-widget-wrap"></div></div><div class="sheet-moves"><div class="move-formatted">${formatMovesWithComments(g.movetext, g.idx)}</div></div>`;
   createChessWidget(body.querySelector(".chess-widget-wrap"), g);
+  footer.innerHTML="";
+  const controls=body.querySelector(".cw-controls");
+  if(controls) footer.appendChild(controls);
+  body.querySelector(".sheet-embed").style.minHeight=body.clientHeight+"px";
   document.body.classList.add("sheet-open");
   history.pushState({sheet:true},"");
   document.getElementById("sheetCloseBtn").focus();
