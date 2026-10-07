@@ -380,25 +380,41 @@ Below `≤700px` (`@media (max-width:700px)`), the table (`.table-wrap`) is repl
     it. `openGameSheet()` clears and re-populates `#sheetFooter` on every call (games are
     re-opened without a full page reload) so reopening a different game doesn't leave a
     stale/duplicate controls bar behind.
-  - `.game-sheet .cw-caption` gets a fixed `height` + `overflow-y:auto` instead of the
-    default collapse-to-`display:none`-when-empty behavior used elsewhere (`.hidden` is
-    overridden to `visibility:hidden` here, keeping the box's footprint constant) — this is
-    the "comments in a fixed-size box" requirement, and it's what keeps the layout below the
-    caption from jumping as you move through moves with and without annotations (the same
-    instinct as the rapid-tap fix, just structural now that the caption no longer sits above
-    the controls at all).
-  - `highlightMove()`'s `scrollIntoView({block:"center"})` call (shared with desktop, where
-    the move list is a separate scrollable column from the board) is **deliberately
-    suppressed when the widget is inside `#sheetBody`** (`createChessWidget`'s `sheetScope`
-    flag). First shipped without this guard, and real testing on staging caught it
-    immediately: since the board and move list now share one scroll region, every tap on
-    next/prev called `scrollIntoView` on the active move span, which scrolled the *whole
-    sheet* down to center it — dragging the board straight out of view ("chessboard appears
-    then we just scroll past it... all I can see is moves"). The move list's below-the-fold
-    position is meant to be an explicit, user-initiated reveal (manual scroll only), not
-    something move navigation ever triggers automatically. The active-move highlight class
-    itself (`.cw-active`) still gets set every tap either way, so it's correctly shown
-    whenever the user does scroll down — only the auto-scroll is skipped for the sheet.
+  - `.cw-caption` has a fixed `height` + `overflow-y:auto` (base rule, not mobile-scoped —
+    see below) instead of the default collapse-to-`display:none`-when-empty behavior used
+    elsewhere (`.cw-caption.hidden` is overridden to `visibility:hidden`, keeping the box's
+    footprint constant). This is the "comments in a fixed-size box" requirement, and it's
+    what keeps the layout below the caption from jumping as you move through moves with and
+    without annotations.
+  - `createChessWidget`'s shared template puts `.cw-caption` **between the bottom nameplate
+    and `.cw-controls`** — under the board, above the move buttons. An earlier version of
+    the rapid-tap fix (see the parent `CLAUDE.md`) moved it to *after* the controls instead,
+    which was only ever needed because the controls used to sit inside the normal flow here
+    on mobile too; it was fine once `.cw-controls` got extracted into `#sheetFooter` (above),
+    since the controls aren't affected by anything's position inside `.chess-widget-wrap`
+    once they're moved out — but it left the caption sitting *below* the controls on
+    **desktop**, where `.cw-controls` was never extracted and stays in its natural position.
+    Real feedback caught it ("The comment on the right should appear under the board but
+    above the move buttons... the entire section has variable height, causing the games
+    below to jump in and out of view") — the fixed-height rule above only existed
+    mobile-scoped at the time, so the caption's natural variable height on desktop was
+    inflating/shrinking the whole two-column row (`.detail-flex`), shoving every row below it
+    up and down as comments appeared, changed length, or disappeared while stepping through
+    moves. Fixed by moving the fixed-height `.cw-caption` rule to the base (non-mobile-scoped)
+    CSS and restoring the caption's original position before the controls — both desktop and
+    the `/g/<id>` single-game share page get the same fixed-footprint caption as the mobile
+    sheet now, and the reorder has no effect on mobile (its controls are already pulled out
+    into `#sheetFooter` regardless of where `.cw-caption` sits in the source template).
+  - `highlightMove()`'s `scrollIntoView({block:"center"})` call used to re-center the active
+    move span in its scroll container on every next/prev tap (shared between desktop, where
+    the move list is a separate scrollable column, and the mobile sheet, where board and
+    moves share one scroll region). It was already suppressed inside the mobile sheet after
+    real testing on staging caught it dragging the board out of view there ("chessboard
+    appears then we just scroll past it... all I can see is moves"), but was still live on
+    desktop — and got reported there too, independently, as just irritating during rapid
+    navigation. Removed entirely rather than re-scoping it further: the active-move highlight
+    class (`.cw-active`) still gets set every tap either way, it just no longer forces any
+    scroll.
 - Closing the sheet pushes/pops a `history.pushState` entry so the Android/mobile back
   gesture closes the sheet instead of leaving the page; Escape and the scrim also close it.
 

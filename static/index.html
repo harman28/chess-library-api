@@ -159,7 +159,8 @@ tr.game:hover td{background:var(--surface-alt)}
 .chess-widget-wrap{flex:0 0 360px;order:2;display:flex;flex-direction:column;align-items:center;gap:.4rem;width:360px;box-sizing:border-box}
 .pgnwrap{order:1}
 .cw-nameplate{width:100%;box-sizing:border-box;font-size:.82rem;font-weight:600;color:var(--text-dim);padding:.35rem .6rem;background:var(--surface-alt);border-radius:.3rem}
-.cw-caption{width:100%;box-sizing:border-box;background:rgba(56,189,248,.09);border-left:3px solid var(--accent);color:var(--comment);padding:.4rem .6rem;border-radius:.25rem;font-style:italic;font-size:.85rem;line-height:1.4}
+.cw-caption{width:100%;height:4.5rem;box-sizing:border-box;overflow-y:auto;background:rgba(56,189,248,.09);border-left:3px solid var(--accent);color:var(--comment);padding:.4rem .6rem;border-radius:.25rem;font-style:italic;font-size:.85rem;line-height:1.4}
+.cw-caption.hidden{display:block!important;visibility:hidden}
 .cw-board-wrap{outline:none;width:100%}
 .cw-board{position:relative;width:360px;height:360px;border:1px solid var(--border);border-radius:.4rem;overflow:hidden;box-shadow:0 2px 10px var(--shadow)}
 .cw-squares{position:absolute;inset:0}
@@ -295,8 +296,6 @@ body.sheet-open .game-sheet{transform:translateY(0)}
 .game-sheet .cw-board-wrap{width:100%}
 .game-sheet .cw-board{width:100%;height:auto;aspect-ratio:1/1}
 .game-sheet .cw-error{width:100%;max-width:440px;margin:0 auto}
-.game-sheet .cw-caption{height:4.5rem;overflow-y:auto;box-sizing:border-box}
-.game-sheet .cw-caption.hidden{display:block!important;visibility:hidden}
 .sheet-footer .cw-controls{width:auto}
 .sheet-moves .move-formatted{padding-right:0}
 
@@ -872,14 +871,14 @@ function createChessWidget(container, g){
   container.innerHTML = `<div class="cw-nameplate cw-nameplate-top"></div>`
     + `<div class="cw-board-wrap" tabindex="0"><div class="cw-board"><div class="cw-squares"></div><div class="cw-pieces"></div></div></div>`
     + `<div class="cw-nameplate cw-nameplate-bottom"></div>`
+    + `<div class="cw-caption hidden"></div>`
     + `<div class="cw-controls">`
     + `<button class="cw-btn cw-first" title="First move" aria-label="First move">⏮</button>`
     + `<button class="cw-btn cw-prev" title="Previous move" aria-label="Previous move">‹</button>`
     + `<button class="cw-btn cw-flip" title="Flip board" aria-label="Flip board">⇅</button>`
     + `<button class="cw-btn cw-next" title="Next move" aria-label="Next move">›</button>`
     + `<button class="cw-btn cw-last" title="Last move" aria-label="Last move">⏭</button>`
-    + `</div>`
-    + `<div class="cw-caption hidden"></div>`;
+    + `</div>`;
   const squaresEl = container.querySelector(".cw-squares");
   const piecesEl = container.querySelector(".cw-pieces");
   const boardWrap = container.querySelector(".cw-board-wrap");
