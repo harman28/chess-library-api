@@ -72,8 +72,8 @@ h1{font-size:1.25rem;margin:0 0 1.5rem}.count{color:var(--accent);font-weight:60
 .landing #stepUpload,.landing #stepConfirm,.landing #manualNameWrap{display:flex;flex-direction:column;gap:1rem}
 .landing h2{margin:0;font-size:1.1rem;font-weight:500;color:var(--text)}
 .landing label{color:var(--text-dim);font-size:.85rem;font-weight:500}
-.landing input[type="text"]{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:.4rem;padding:.6rem .8rem;font-size:.92rem;width:100%;outline:none;box-sizing:border-box;transition:border-color .15s,box-shadow .15s}
-.landing input[type="text"]:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(56,189,248,.15)}
+.landing input[type="text"],.landing input[type="password"]{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:.4rem;padding:.6rem .8rem;font-size:.92rem;width:100%;outline:none;box-sizing:border-box;transition:border-color .15s,box-shadow .15s}
+.landing input[type="text"]:focus,.landing input[type="password"]:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(56,189,248,.15)}
 .landing input[type="file"]{width:100%;color:var(--text-dim);font-size:.85rem}
 .landing input[type="file"]::file-selector-button{background:var(--surface-alt);color:var(--text);border:1px solid var(--border);border-radius:.4rem;padding:.5rem .9rem;font-weight:600;font-size:.85rem;cursor:pointer;margin-right:.75rem;transition:border-color .15s,background .15s}
 .landing input[type="file"]::file-selector-button:hover{background:var(--border);border-color:var(--border-hover)}
@@ -337,6 +337,7 @@ body.sheet-open .game-sheet{transform:translateY(0)}
 <div class="team-lib-banner hidden" id="teamLibraryBanner">
   <span>Shared Team Library &mdash; anyone with this link can view and add games, no login needed.</span>
   <span class="team-lib-status" id="teamLibraryStatus"></span>
+  <button id="teamLibPasswordBtn" type="button" class="link-btn">&#128274; Password protect</button>
 </div>
 <div class="landing" id="landing">
 <div class="landing-inner">
@@ -357,6 +358,10 @@ body.sheet-open .game-sheet{transform:translateY(0)}
 <div class="landing-sep"><span>or try a demo</span></div>
 <button id="tryDemoBtn" type="button" class="primary">Try a Demo</button>
 <div class="landing-sep"><span>or</span></div>
+<label style="display:flex;align-items:center;gap:.4rem;font-weight:400;font-size:.85rem;margin-top:.5rem">
+  <input type="checkbox" id="teamLibCreatePasswordToggle"> Password protect this library
+</label>
+<input type="password" id="teamLibCreatePasswordInput" class="hidden" placeholder="Choose a password (8-128 characters)" autocomplete="new-password" style="margin-top:.4rem">
 <button id="createTeamLibBtn" type="button">Create a Shared Team Library</button>
 <div style="color:var(--text-faint);font-size:.8rem">A new, empty library at a permanent link, no login needed &mdash; share it with your team and anyone with the link can add games.</div>
 </div>
@@ -511,6 +516,29 @@ body.sheet-open .game-sheet{transform:translateY(0)}
     <div id="authGoogleWrap" class="auth-google-wrap hidden">
       <div class="auth-divider"><span>or</span></div>
       <div id="googleSignInBtn"></div>
+    </div>
+  </div>
+</div>
+<div id="teamLibPasswordModal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h2 id="teamLibPasswordModalTitle">Password Protect This Library</h2>
+    <div id="teamLibPasswordError" class="auth-error hidden"></div>
+    <div id="teamLibPasswordUnlockWrap" class="hidden">
+      <label>Password</label>
+      <input type="password" id="teamLibPasswordUnlockInput" autocomplete="current-password">
+    </div>
+    <div id="teamLibPasswordCurrentWrap" class="hidden">
+      <label>Current Password</label>
+      <input type="password" id="teamLibPasswordCurrentInput" autocomplete="current-password">
+    </div>
+    <div id="teamLibPasswordNewWrap" class="hidden">
+      <label id="teamLibPasswordNewLabel">Password</label>
+      <input type="password" id="teamLibPasswordNewInput" autocomplete="new-password">
+      <div id="teamLibPasswordNewHint" style="color:var(--text-faint);font-size:.78rem;margin-top:.2rem"></div>
+    </div>
+    <div class="modal-actions">
+      <button id="teamLibPasswordCancelBtn" type="button">Cancel</button>
+      <button id="teamLibPasswordSubmitBtn" type="button" class="primary">Save</button>
     </div>
   </div>
 </div>
@@ -1999,14 +2027,28 @@ Mate."} 0-1
 document.getElementById("tryDemoBtn").addEventListener("click",()=>{
   loadGames(DEMO_PGN, "Demo");
 });
+document.getElementById("teamLibCreatePasswordToggle").addEventListener("change",(e)=>{
+  document.getElementById("teamLibCreatePasswordInput").classList.toggle("hidden", !e.target.checked);
+});
 document.getElementById("createTeamLibBtn").addEventListener("click", async ()=>{
   const btn=document.getElementById("createTeamLibBtn");
+  const wantsPassword=document.getElementById("teamLibCreatePasswordToggle").checked;
+  const password=wantsPassword ? document.getElementById("teamLibCreatePasswordInput").value : "";
+  if(wantsPassword && (password.length<TEAM_LIB_PW_MIN || password.length>TEAM_LIB_PW_MAX)){
+    alert(`Password must be ${TEAM_LIB_PW_MIN}-${TEAM_LIB_PW_MAX} characters.`);
+    return;
+  }
   const oldLabel=btn.textContent;
   btn.disabled=true; btn.textContent="Creating…";
   try{
-    const res=await fetch(API_BASE+API_LIBRARIES_PATH+"/new", {method:"POST"});
+    const res=await fetch(API_BASE+API_LIBRARIES_PATH+"/new", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(wantsPassword ? {password} : {})
+    });
     if(!res.ok) throw new Error("failed");
     const data=await res.json();
+    if(wantsPassword){ try{ sessionStorage.setItem("teamLibPw:"+data.id, password); }catch(_){} }
     location.href=location.origin+"/team/"+data.id;
   }catch(_){
     alert("Couldn't create a shared library right now. Please try again in a moment.");
@@ -2112,14 +2154,19 @@ const API_LIBRARIES_PATH="/api/libraries";
 const API_AUTH_PATH="/api/auth";
 const API_LIBRARY_MINE_PATH="/api/library/mine";
 const API_GAME_SHARE_PATH="/api/games/share";
+const TEAM_LIBRARY_PASSWORD_HEADER="X-Team-Library-Password";
+const TEAM_LIB_PW_MIN=8, TEAM_LIB_PW_MAX=128;  // mirrors MIN/MAX_PASSWORD_LEN in app.py
 const AUTH_TOKEN_KEY="chessLibraryAuthToken";
 let authToken=null; let authUsername=null; let authMode="login"; let authSyncTimer=null;
 // Set only while viewing a shared team library (/team/<id>) - see loadTeamLibrary(). Every
 // edit auto-saves back to this same id (scheduleTeamLibrarySync, below) so any teammate who
 // opens the same link afterward sees the latest state; there's no login and no per-account
 // row, just the id itself as the access control, same trust model as this app's existing
-// anonymous library links.
-let teamLibraryId=null; let teamLibrarySyncTimer=null;
+// anonymous library links - optionally with a password layered on top (see "Team libraries"
+// in CLAUDE.md). teamLibraryPassword is the password that successfully unlocked the
+// currently-open library, if any - sent on every subsequent read/write so a protected
+// library stays protected end to end, not just on the initial load.
+let teamLibraryId=null; let teamLibrarySyncTimer=null; let teamLibraryPassword=null; let teamLibraryProtected=false;
 function updateAccountUI(){
   document.getElementById("accountBtnLabel").textContent=
     authUsername ? authUsername : (games.length ? "Save My Library" : "Log In");
@@ -2341,9 +2388,11 @@ async function syncTeamLibrary(){
   const banner=document.getElementById("teamLibraryStatus");
   try{
     const pgn=buildPgnForGames(games);
+    const headers={"Content-Type":"application/json"};
+    if(teamLibraryPassword) headers[TEAM_LIBRARY_PASSWORD_HEADER]=teamLibraryPassword;
     const res=await fetch(API_BASE+API_LIBRARIES_PATH+"/"+encodeURIComponent(teamLibraryId), {
       method:"PUT",
-      headers:{"Content-Type":"application/json"},
+      headers,
       body:JSON.stringify({playerName, pgn})
     });
     if(banner) banner.textContent = res.ok ? "Saved to this shared link" : "Couldn't save - try again";
@@ -2363,22 +2412,135 @@ async function checkAuthOnLoad(){
     return true;
   }catch(_){ return false; }
 }
-async function loadTeamLibrary(id){
+async function loadTeamLibrary(id, password){
   try{
-    const res=await fetch(API_BASE+API_LIBRARIES_PATH+"/"+encodeURIComponent(id));
-    if(!res.ok) return false;
+    const headers={};
+    if(password) headers[TEAM_LIBRARY_PASSWORD_HEADER]=password;
+    const res=await fetch(API_BASE+API_LIBRARIES_PATH+"/"+encodeURIComponent(id), {headers});
+    if(res.status===401) return {ok:false, needsPassword:true};
+    if(!res.ok) return {ok:false, needsPassword:false};
     const data=await res.json();
     teamLibraryId=id;
+    teamLibraryPassword=password||null;
+    teamLibraryProtected=!!data.passwordProtected;
     // A team library is shared state, not this visitor's own - never persisted to their
     // own localStorage (see saveToStorage's teamLibraryId guard); skipPersist here just
     // avoids an unnecessary sync-back to the server before anything has actually changed.
     loadGames(data.pgn||"", data.playerName||"Team Library", true);
     document.getElementById("teamLibraryBanner").classList.remove("hidden");
-    return true;
+    updateTeamLibraryPasswordUI();
+    return {ok:true};
   }catch(err){
-    return false;
+    return {ok:false, needsPassword:false};
   }
 }
+function updateTeamLibraryPasswordUI(){
+  const btn=document.getElementById("teamLibPasswordBtn");
+  if(btn) btn.innerHTML = teamLibraryProtected ? "&#128274; Change password" : "&#128274; Password protect";
+}
+// teamLibPasswordModal is shared by two different jobs, switched via teamLibPwMode:
+//  - "unlock": entering a /team/<id> link that's protected, no password known yet (or a
+//    stored one turned out to be wrong). Resolves the promise openTeamLibUnlockModal()
+//    returns once loadTeamLibrary() actually succeeds with the typed password - the modal
+//    stays open and shows an inline error on a wrong guess rather than closing/reopening.
+//  - "manage": the banner's lock button on an already-open library, to set the first
+//    password, change it, or remove it (blank new password).
+let teamLibPwMode=null; let teamLibPwResolve=null; let teamLibPwTargetId=null;
+function showTeamLibPwError(msg){
+  const el=document.getElementById("teamLibPasswordError");
+  el.textContent=msg; el.classList.remove("hidden");
+}
+function hideTeamLibPwError(){ document.getElementById("teamLibPasswordError").classList.add("hidden"); }
+function openTeamLibUnlockModal(id, errorMsg){
+  teamLibPwMode="unlock"; teamLibPwTargetId=id;
+  document.getElementById("teamLibPasswordModalTitle").textContent="Enter Password";
+  document.getElementById("teamLibPasswordUnlockWrap").classList.remove("hidden");
+  document.getElementById("teamLibPasswordCurrentWrap").classList.add("hidden");
+  document.getElementById("teamLibPasswordNewWrap").classList.add("hidden");
+  document.getElementById("teamLibPasswordUnlockInput").value="";
+  document.getElementById("teamLibPasswordSubmitBtn").textContent="Unlock";
+  if(errorMsg) showTeamLibPwError(errorMsg); else hideTeamLibPwError();
+  document.getElementById("teamLibPasswordModal").classList.remove("hidden");
+  document.getElementById("teamLibPasswordUnlockInput").focus();
+  return new Promise(resolve=>{ teamLibPwResolve=resolve; });
+}
+function openTeamLibManageModal(){
+  teamLibPwMode="manage";
+  const isProtected=teamLibraryProtected;
+  document.getElementById("teamLibPasswordModalTitle").textContent = isProtected ? "Change or Remove Password" : "Password Protect This Library";
+  document.getElementById("teamLibPasswordUnlockWrap").classList.add("hidden");
+  document.getElementById("teamLibPasswordCurrentWrap").classList.toggle("hidden", !isProtected);
+  document.getElementById("teamLibPasswordNewWrap").classList.remove("hidden");
+  document.getElementById("teamLibPasswordNewLabel").textContent = isProtected ? "New Password (leave blank to remove protection)" : "Password";
+  document.getElementById("teamLibPasswordNewHint").textContent = `${TEAM_LIB_PW_MIN}-${TEAM_LIB_PW_MAX} characters`;
+  document.getElementById("teamLibPasswordCurrentInput").value="";
+  document.getElementById("teamLibPasswordNewInput").value="";
+  document.getElementById("teamLibPasswordSubmitBtn").textContent="Save";
+  hideTeamLibPwError();
+  document.getElementById("teamLibPasswordModal").classList.remove("hidden");
+  (isProtected?document.getElementById("teamLibPasswordCurrentInput"):document.getElementById("teamLibPasswordNewInput")).focus();
+}
+function closeTeamLibPasswordModal(resolveValue){
+  document.getElementById("teamLibPasswordModal").classList.add("hidden");
+  if(teamLibPwResolve){ const r=teamLibPwResolve; teamLibPwResolve=null; r(resolveValue===undefined?null:resolveValue); }
+}
+document.getElementById("teamLibPasswordCancelBtn").addEventListener("click", ()=>closeTeamLibPasswordModal(false));
+document.getElementById("teamLibPasswordModal").addEventListener("click", (e)=>{ if(e.target.id==="teamLibPasswordModal") closeTeamLibPasswordModal(false); });
+document.getElementById("teamLibPasswordBtn").addEventListener("click", openTeamLibManageModal);
+async function submitTeamLibPasswordModal(){
+  hideTeamLibPwError();
+  const btn=document.getElementById("teamLibPasswordSubmitBtn");
+  const oldLabel=btn.textContent;
+  if(teamLibPwMode==="unlock"){
+    const pw=document.getElementById("teamLibPasswordUnlockInput").value;
+    if(!pw){ showTeamLibPwError("Enter the password."); return; }
+    btn.disabled=true; btn.textContent="Checking…";
+    try{
+      const res=await loadTeamLibrary(teamLibPwTargetId, pw);
+      if(res.ok){
+        try{ sessionStorage.setItem("teamLibPw:"+teamLibPwTargetId, pw); }catch(_){}
+        closeTeamLibPasswordModal(true);
+      } else {
+        showTeamLibPwError("Incorrect password. Try again.");
+      }
+    }finally{ btn.disabled=false; btn.textContent=oldLabel; }
+    return;
+  }
+  // "manage" mode: set/change/remove the password on the already-open library
+  const currentPassword = teamLibraryProtected ? document.getElementById("teamLibPasswordCurrentInput").value : null;
+  const newPassword = document.getElementById("teamLibPasswordNewInput").value || null;
+  if(teamLibraryProtected && !currentPassword){ showTeamLibPwError("Enter the current password."); return; }
+  if(newPassword && (newPassword.length<TEAM_LIB_PW_MIN || newPassword.length>TEAM_LIB_PW_MAX)){
+    showTeamLibPwError(`New password must be ${TEAM_LIB_PW_MIN}-${TEAM_LIB_PW_MAX} characters.`);
+    return;
+  }
+  btn.disabled=true; btn.textContent="Saving…";
+  try{
+    const res=await fetch(API_BASE+API_LIBRARIES_PATH+"/"+encodeURIComponent(teamLibraryId)+"/password", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({currentPassword, newPassword})
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok){ showTeamLibPwError(data.error||"Couldn't update the password."); return; }
+    teamLibraryProtected=!!newPassword;
+    teamLibraryPassword=newPassword||null;
+    try{
+      if(newPassword) sessionStorage.setItem("teamLibPw:"+teamLibraryId, newPassword);
+      else sessionStorage.removeItem("teamLibPw:"+teamLibraryId);
+    }catch(_){}
+    updateTeamLibraryPasswordUI();
+    closeTeamLibPasswordModal();
+  }catch(err){
+    showTeamLibPwError("Something went wrong. Please try again.");
+  }finally{
+    btn.disabled=false; btn.textContent=oldLabel;
+  }
+}
+document.getElementById("teamLibPasswordSubmitBtn").addEventListener("click", submitTeamLibPasswordModal);
+document.getElementById("teamLibPasswordNewInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); submitTeamLibPasswordModal(); } });
+document.getElementById("teamLibPasswordUnlockInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); submitTeamLibPasswordModal(); } });
+document.getElementById("teamLibPasswordCurrentInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); submitTeamLibPasswordModal(); } });
 async function loadFromRemoteLibrary(id){
   try{
     const res=await fetch(API_BASE+API_LIBRARIES_PATH+"/"+encodeURIComponent(id));
@@ -2478,8 +2640,15 @@ function restoreFromStorage(){
   }
   const teamMatch=location.pathname.match(/^\/team\/([^/]+)\/?$/);
   if(teamMatch){
-    const ok=await loadTeamLibrary(teamMatch[1]);
-    if(ok) return;
+    const id=teamMatch[1];
+    let storedPw=null;
+    try{ storedPw=sessionStorage.getItem("teamLibPw:"+id); }catch(_){}
+    const res=await loadTeamLibrary(id, storedPw);
+    if(res.needsPassword){
+      await openTeamLibUnlockModal(id, storedPw ? "Incorrect password. Try again." : null);
+      return;
+    }
+    if(res.ok) return;
     alert("Couldn't find that shared team library. The link may be mistyped.");
   }
   const libId=new URLSearchParams(location.search).get("lib");

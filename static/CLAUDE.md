@@ -274,15 +274,15 @@ node your_script.js`.
   unauthenticated writes here): `teamLibraryId` is the one flag that changes everything
   else's behavior while set — `saveToStorage()` skips `localStorage` entirely (this
   visitor's own personal library must never absorb someone else's shared games), fires
-  `scheduleTeamLibrarySync()` (a 1.5s-debounced `PUT /api/libraries/<id>`, no auth,
-  structurally identical to `scheduleAuthSync()`/`syncLibraryToAccount()` for logged-in
-  accounts) instead of/alongside `scheduleAuthSync()`, and `submitAuthForm()` skips both
+  `scheduleTeamLibrarySync()` (a 1.5s-debounced `PUT /api/libraries/<id>`, structurally
+  identical to `scheduleAuthSync()`/`syncLibraryToAccount()` for logged-in accounts)
+  instead of/alongside `scheduleAuthSync()`, and `submitAuthForm()` skips both
   `syncLibraryToAccount()` and `pullLibraryFromAccount()` so logging in mid-session can't
   cross-contaminate the shared view with a personal account or vice versa. `loadTeamLibrary
-  (id)` (called from `init()` on a `/team/<id>` path match) fetches the current state via
-  the same `GET /api/libraries/<id>` the anonymous-link flow already uses, then calls
-  `loadGames(pgn, playerName, true)` — `skipPersist=true` here isn't for privacy the way it
-  is on the single-shared-game view, just to avoid an immediately-redundant sync-back
+  (id, password)` (called from `init()` on a `/team/<id>` path match) fetches the current
+  state via the same `GET /api/libraries/<id>` the anonymous-link flow already uses, then
+  calls `loadGames(pgn, playerName, true)` — `skipPersist=true` here isn't for privacy the
+  way it is on the single-shared-game view, just to avoid an immediately-redundant sync-back
   before anything has actually changed. `#teamLibraryBanner`/`#teamLibraryStatus` (shown/
   updated only in this mode) name the trust model up front and confirm each save, so
   "changes are visible to anyone with this link" is never a silent surprise. Creating one:
@@ -290,6 +290,23 @@ node your_script.js`.
   id it gets back — the same API any other project should call to mint links
   programmatically (see parent `CLAUDE.md`), and the same underlying action `GET /team/new`
   performs server-side for a plain, JS-free bookmarkable link.
+- **Team library passwords** (added 2026-10-07 — see the parent `CLAUDE.md`'s "Team library
+  passwords" subsection for the full design, including why setting the *first* password
+  needs no current one but changing/removing an existing one does): `teamLibPasswordModal`
+  does double duty for both jobs via `teamLibPwMode` — `"unlock"` (shown automatically by
+  `init()` when `loadTeamLibrary()` 401s, with an inline error and the modal staying open on
+  a wrong guess rather than closing) and `"manage"` (`#teamLibPasswordBtn` in the banner).
+  `loadTeamLibrary(id, password)` returns `{ok, needsPassword}` rather than a plain boolean
+  specifically so `init()` can tell "wrong/missing password" apart from "link doesn't exist"
+  and show the right one. The password that successfully unlocked the current library
+  (`teamLibraryPassword`) is sent as `X-Team-Library-Password` on every subsequent
+  `GET`/`PUT`, including the debounced auto-save in `syncTeamLibrary()` — forgetting that
+  header on any one of these would silently break either reads or writes on a protected
+  library, so if you touch the fetch calls in this area, check both stayed in sync. Also
+  cached in `sessionStorage` under `teamLibPw:<id>` (tab-scoped on purpose, see the parent
+  `CLAUDE.md`) so a reload doesn't re-prompt; `#createTeamLibBtn`'s handler writes to that
+  same key *before* navigating to the new `/team/<id>`, so a creator who just set a password
+  isn't immediately asked to re-type it.
 - **`API_BASE` is `""` (same-origin)**, not a hardcoded cross-origin Railway URL — frontend
   and API are the same process now. If you ever see a hardcoded `chess-library-api.up
   .railway.app` reappear anywhere in this file, that's a regression from before the
