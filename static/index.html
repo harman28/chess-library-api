@@ -866,8 +866,7 @@ function createChessWidget(container, g){
   }
   let ply = 0;
   let orientation = g.color==="black" ? "black" : "white";
-  const sheetScope = container.closest("#sheetBody");
-  const scope = sheetScope || container.closest(".detail-flex") || document;
+  const scope = container.closest("#sheetBody") || container.closest(".detail-flex") || document;
   const reduceMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
   container.innerHTML = `<div class="cw-nameplate cw-nameplate-top"></div>`
@@ -961,7 +960,7 @@ function createChessWidget(container, g){
     let comment = null;
     if(ply>0){
       const span = scope.querySelector('.move-san-editable[data-ply="'+ply+'"]');
-      if(span){ span.classList.add("cw-active"); if(!sheetScope && span.scrollIntoView) span.scrollIntoView({block:"center", behavior: reduceMotion ? "auto" : "smooth"}); }
+      if(span){ span.classList.add("cw-active"); }
       comment = scope.querySelector('.move-comment[data-ply="'+ply+'"]');
       if(comment) comment.classList.add("cw-active");
     }
