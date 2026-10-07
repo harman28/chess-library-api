@@ -380,10 +380,18 @@ Below `≤700px` (`@media (max-width:700px)`), the table (`.table-wrap`) is repl
     caption from jumping as you move through moves with and without annotations (the same
     instinct as the rapid-tap fix, just structural now that the caption no longer sits above
     the controls at all).
-  - Move navigation's existing `scrollIntoView({block:"center"})` (shared with desktop, see
-    `highlightMove()`) now doubles as the mechanism for "reveal the moves by scrolling" —
-    tapping through moves on mobile auto-scrolls `#sheetBody` to bring the active move into
-    view even though the list starts off-screen, without any mobile-specific scroll code.
+  - `highlightMove()`'s `scrollIntoView({block:"center"})` call (shared with desktop, where
+    the move list is a separate scrollable column from the board) is **deliberately
+    suppressed when the widget is inside `#sheetBody`** (`createChessWidget`'s `sheetScope`
+    flag). First shipped without this guard, and real testing on staging caught it
+    immediately: since the board and move list now share one scroll region, every tap on
+    next/prev called `scrollIntoView` on the active move span, which scrolled the *whole
+    sheet* down to center it — dragging the board straight out of view ("chessboard appears
+    then we just scroll past it... all I can see is moves"). The move list's below-the-fold
+    position is meant to be an explicit, user-initiated reveal (manual scroll only), not
+    something move navigation ever triggers automatically. The active-move highlight class
+    itself (`.cw-active`) still gets set every tap either way, so it's correctly shown
+    whenever the user does scroll down — only the auto-scroll is skipped for the sheet.
 - Closing the sheet pushes/pops a `history.pushState` entry so the Android/mobile back
   gesture closes the sheet instead of leaving the page; Escape and the scrim also close it.
 
