@@ -399,10 +399,30 @@ Below `≤700px` (`@media (max-width:700px)`), the table (`.table-wrap`) is repl
     stale/duplicate controls bar behind.
   - `.cw-caption` has a fixed `height` + `overflow-y:auto` (base rule, not mobile-scoped —
     see below) instead of the default collapse-to-`display:none`-when-empty behavior used
-    elsewhere (`.cw-caption.hidden` is overridden to `visibility:hidden`, keeping the box's
+    elsewhere (`.cw-caption.hidden` is overridden to `opacity:0`, keeping the box's
     footprint constant). This is the "comments in a fixed-size box" requirement, and it's
     what keeps the layout below the caption from jumping as you move through moves with and
     without annotations.
+  - **The caption is itself a click target for adding/editing that move's comment**
+    (`openCaptionCommentModal()` in `createChessWidget`, reuses the same `openCommentModal
+    (gameIdx, moveIdx)`/`editCommentModal` the move list's own pencil icon already opens —
+    requested directly off a screenshot of the sheet: "I should be able to add a comment by
+    clicking where it should appear"). Only active when `ply>0` (there's an actual move to
+    attach a comment to — toggled every `highlightMove()` call via a `cw-caption-clickable`
+    class, which is also what shows the pointer cursor/hover tint; no visible "Add a
+    comment…" placeholder text while empty, matching the earlier explicit "no placeholder
+    text when empty" preference from the original caption redesign). `opacity:0` rather than
+    `visibility:hidden` for the empty state (above) is *why* this works at all — a
+    `visibility:hidden` element doesn't receive clicks, so it had to change for the empty
+    caption to stay clickable while still invisible. Giving the caption `tabindex="0"`/
+    `role="button"` for keyboard access introduced its own small bug: focusing it triggers
+    the browser's default scroll-the-focused-element-into-view behavior, which nudged the
+    mobile sheet's scroll position a few px on every click — fixed by `e.preventDefault()`
+    on the caption's own `mousedown` (suppresses the browser's default click-to-focus
+    without blocking the `click` event itself), confirmed with a *real* trusted pointer
+    click (Playwright's own higher-level `.click()` does its own scroll-into-view before
+    clicking and will misleadingly reproduce drift that a real click never causes — isolate
+    with `page.mouse.click(x, y)` at the element's own center instead).
   - `createChessWidget`'s shared template puts `.cw-caption` **between the bottom nameplate
     and `.cw-controls`** — under the board, above the move buttons. An earlier version of
     the rapid-tap fix (see the parent `CLAUDE.md`) moved it to *after* the controls instead,
