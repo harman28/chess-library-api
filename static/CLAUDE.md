@@ -358,10 +358,17 @@ Below `≤700px` (`@media (max-width:700px)`), the table (`.table-wrap`) is repl
   drove the current structure:
   - `#sheetBody` (`.sheet-body`) is **one unified scroll region** — `.sheet-embed` (the board
     + nameplates + caption, via `createChessWidget`) followed in normal flow by `.sheet-moves`
-    (the full move list). The move list is deliberately **not visible without scrolling**:
-    `openGameSheet()` measures `sheetBody.clientHeight` after the widget (and footer, see
-    below) are in place and sets that as `.sheet-embed`'s `min-height`, so the board/caption
-    always fill at least the full initial viewport and the move list starts below the fold.
+    (the full move list). `.sheet-embed` is sized purely by its own natural content — no
+    forced `min-height`. An earlier version measured `sheetBody.clientHeight` and set that as
+    `.sheet-embed`'s `min-height` to *guarantee* the move list started below the fold; real
+    feedback caught the problem with that ("there is a lot of empty space when I first open a
+    game, even when there is a comment on the very first move" — the sheet opens at ply 0,
+    before any comment is showing, so the embed region is often much shorter than a full
+    screen, and forcing it to fill the whole viewport anyway just padded it out with dead
+    space). Letting it size naturally trades the "moves are *never* visible without scrolling"
+    guarantee for "no dead space" — on a tall enough screen with a short/compact game, the top
+    edge of the move list can peek into view without scrolling, which reads as a reasonable
+    "more below" affordance rather than a layout bug.
   - `.cw-controls` (the ⏮‹⇅›⏭ buttons, part of `createChessWidget`'s shared template) is
     **moved out of the widget into `#sheetFooter`**, a separate flex sibling of `#sheetBody`
     after the sheet's own DOM is built — not into a `position:fixed` overlay. An earlier
@@ -369,10 +376,10 @@ Below `≤700px` (`@media (max-width:700px)`), the table (`.table-wrap`) is repl
     works as a containing block for it), but that let the bar visually overlay/clip whatever
     happened to scroll to the bottom of the viewport (confirmed the hard way: the caption box
     ended up partly hidden underneath it). Giving the footer its own reserved flex row instead
-    means `#sheetBody`'s own height (and thus the `min-height` measurement above) already
-    excludes it — nothing can ever render underneath it. `openGameSheet()` clears and
-    re-populates `#sheetFooter` on every call (games are re-opened without a full page
-    reload) so reopening a different game doesn't leave a stale/duplicate controls bar behind.
+    means `#sheetBody`'s own height already excludes it — nothing can ever render underneath
+    it. `openGameSheet()` clears and re-populates `#sheetFooter` on every call (games are
+    re-opened without a full page reload) so reopening a different game doesn't leave a
+    stale/duplicate controls bar behind.
   - `.game-sheet .cw-caption` gets a fixed `height` + `overflow-y:auto` instead of the
     default collapse-to-`display:none`-when-empty behavior used elsewhere (`.hidden` is
     overridden to `visibility:hidden` here, keeping the box's footprint constant) — this is

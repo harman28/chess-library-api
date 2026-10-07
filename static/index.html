@@ -1495,7 +1495,6 @@ function openGameSheet(g){
   footer.innerHTML="";
   const controls=body.querySelector(".cw-controls");
   if(controls) footer.appendChild(controls);
-  body.querySelector(".sheet-embed").style.minHeight=body.clientHeight+"px";
   document.body.classList.add("sheet-open");
   history.pushState({sheet:true},"");
   document.getElementById("sheetCloseBtn").focus();
