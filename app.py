@@ -22,6 +22,7 @@ SESSION_TOKEN_BYTES = 32  # secrets.token_urlsafe(32) -> ~43 url-safe chars, ~25
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{3,32}$")
 MIN_PASSWORD_LEN = 8
 MAX_PASSWORD_LEN = 128
+TEAM_LIBRARY_PASSWORD_HEADER = "X-Team-Library-Password"
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 PIECES_DIR = os.path.join(STATIC_DIR, "pieces")
@@ -116,6 +117,9 @@ def init_db():
                 "ALTER TABLE libraries ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
             )
             cur.execute(
+                "ALTER TABLE libraries ADD COLUMN IF NOT EXISTS password_hash TEXT"
+            )
+            cur.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS libraries_user_id_unique ON libraries (user_id)"
             )
             cur.execute(
@@ -167,13 +171,29 @@ def create_library():
     return jsonify(id=library_id), 201
 
 
+def _library_password_error(password_hash):
+    # Shared by GET/PUT /api/libraries/<id> - both need the exact same check before they'll
+    # touch a protected row's content. Returns a (message, status) tuple to turn into a 401
+    # response, or None if the request may proceed. A team library's password is an
+    # additional, optional layer on top of the link itself (which stays the only access
+    # control for an unprotected one) - see "Team libraries" in the parent CLAUDE.md.
+    if not password_hash:
+        return None
+    supplied = request.headers.get(TEAM_LIBRARY_PASSWORD_HEADER)
+    if not supplied:
+        return ("password required", 401)
+    if not check_password_hash(password_hash, supplied):
+        return ("incorrect password", 401)
+    return None
+
+
 @app.get("/api/libraries/<library_id>")
 def get_library(library_id):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT player_name, pgn FROM libraries WHERE id = %s",
+                "SELECT player_name, pgn, password_hash FROM libraries WHERE id = %s",
                 (library_id,),
             )
             row = cur.fetchone()
@@ -183,8 +203,13 @@ def get_library(library_id):
     if row is None:
         return jsonify(error="not found"), 404
 
-    player_name, pgn = row
-    return jsonify(playerName=player_name, pgn=pgn)
+    player_name, pgn, password_hash = row
+    err = _library_password_error(password_hash)
+    if err:
+        message, status = err
+        return jsonify(error=message, passwordProtected=True), status
+
+    return jsonify(playerName=player_name, pgn=pgn, passwordProtected=bool(password_hash))
 
 
 # ---- team libraries ----
@@ -211,14 +236,15 @@ def get_library(library_id):
 # the fact from a snapshot, the way the existing "Save My Library" flow works.
 
 
-def _new_empty_library_id():
+def _new_empty_library_id(password=None):
     library_id = secrets.token_urlsafe(ID_BYTES)
+    password_hash = generate_password_hash(password, method="pbkdf2:sha256") if password else None
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO libraries (id, player_name, pgn) VALUES (%s, %s, %s)",
-                (library_id, "Team Library", ""),
+                "INSERT INTO libraries (id, player_name, pgn, password_hash) VALUES (%s, %s, %s, %s)",
+                (library_id, "Team Library", "", password_hash),
             )
         conn.commit()
     finally:
@@ -226,13 +252,33 @@ def _new_empty_library_id():
     return library_id
 
 
+def _validate_new_password(password):
+    # Shared by library creation and the password-management endpoint below. A blank/absent
+    # password is always fine (means "no protection"); only a non-empty one has length
+    # bounds, the same ones used for account passwords.
+    if not password:
+        return None
+    if not (MIN_PASSWORD_LEN <= len(password) <= MAX_PASSWORD_LEN):
+        return f"password must be {MIN_PASSWORD_LEN}-{MAX_PASSWORD_LEN} characters"
+    return None
+
+
 @app.post("/api/libraries/new")
 def create_empty_library():
-    return jsonify(id=_new_empty_library_id()), 201
+    data = request.get_json(silent=True) or {}
+    password = data.get("password") or None
+    error = _validate_new_password(password)
+    if error:
+        return jsonify(error=error), 400
+    return jsonify(id=_new_empty_library_id(password)), 201
 
 
 @app.get("/team/new")
 def new_team_library_redirect():
+    # No password option here - this is the plain-<a href>, no-JS/no-JSON path (see the
+    # comment above), and there's nowhere for a visitor to type one on the way through a
+    # redirect. A password can still be added afterward from the library's own page once
+    # it's open - see POST /api/libraries/<id>/password below.
     library_id = _new_empty_library_id()
     return redirect(f"/team/{library_id}")
 
@@ -249,18 +295,65 @@ def update_library(library_id):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            cur.execute("SELECT password_hash FROM libraries WHERE id = %s", (library_id,))
+            row = cur.fetchone()
+            if row is None:
+                return jsonify(error="not found"), 404
+            err = _library_password_error(row[0])
+            if err:
+                message, status = err
+                return jsonify(error=message), status
             cur.execute(
                 "UPDATE libraries SET player_name = %s, pgn = %s, updated_at = now() WHERE id = %s",
                 (player_name, pgn, library_id),
             )
-            updated = cur.rowcount > 0
         conn.commit()
     finally:
         put_conn(conn)
 
-    if not updated:
-        return jsonify(error="not found"), 404
     return jsonify(status="ok")
+
+
+@app.post("/api/libraries/<library_id>/password")
+def set_library_password(library_id):
+    # Sets, changes, or removes a team library's password. Same trust model as everything
+    # else about a team library: possession of the link is enough to set the *first*
+    # password (there's no account/admin token to check against), but once one exists,
+    # changing or removing it requires supplying the current one - otherwise anyone who
+    # merely has the (now-protected) link, without the password, could strip protection
+    # back off a library they can't even read. Deliberately a separate endpoint from PUT
+    # (content vs. protection), and deliberately not gated by _library_password_error itself
+    # (that helper is "can you read/write the content" - this endpoint has its own, slightly
+    # different rule: no password yet -> anyone with the link may set one).
+    data = request.get_json(silent=True) or {}
+    current_password = data.get("currentPassword") or None
+    new_password = data.get("newPassword") or None
+
+    error = _validate_new_password(new_password)
+    if error:
+        return jsonify(error=error), 400
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT password_hash FROM libraries WHERE id = %s", (library_id,))
+            row = cur.fetchone()
+            if row is None:
+                return jsonify(error="not found"), 404
+            existing_hash = row[0]
+            if existing_hash:
+                if not current_password or not check_password_hash(existing_hash, current_password):
+                    return jsonify(error="incorrect password"), 401
+            new_hash = generate_password_hash(new_password, method="pbkdf2:sha256") if new_password else None
+            cur.execute(
+                "UPDATE libraries SET password_hash = %s WHERE id = %s",
+                (new_hash, library_id),
+            )
+        conn.commit()
+    finally:
+        put_conn(conn)
+
+    return jsonify(status="ok", passwordProtected=bool(new_password))
 
 
 # ---- single-game sharing ----

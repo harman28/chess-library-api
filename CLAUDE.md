@@ -36,26 +36,45 @@ below is a single, plain path/name; there's no more `/dev/`-prefixed duplicate.
 Anonymous libraries (unchanged):
 - `POST /api/libraries` — body `{playerName, pgn}` → `{id}` (201). Validates non-empty
   fields and a 5MB payload cap (413 if exceeded).
-- `GET /api/libraries/<id>` — `{playerName, pgn}` (200) or `{"error": "not found"}` (404).
+- `GET /api/libraries/<id>` — `{playerName, pgn, passwordProtected}` (200) or
+  `{"error": "not found"}` (404). For a password-protected team library (see "Team library
+  passwords" below), also 401 if the `X-Team-Library-Password` header is missing or wrong
+  — an anonymous (never-team) library never sets a password, so this is unchanged for every
+  pre-existing use of this route.
 
 Team libraries (see "Team libraries" below for full design rationale):
-- `POST /api/libraries/new` — no body → `{id}` (201). Creates an empty `libraries` row
-  (`player_name="Team Library"`, `pgn=""`). This is **the** API for minting a new shared
-  library link programmatically — any project, this user's or otherwise, should call this
-  rather than `POST /api/libraries` (which requires non-empty `pgn` and was designed for
-  "save my current library," not "hand me a blank one to build up"). A caller running in
-  its own frontend JS needs its origin added to `ALLOWED_ORIGIN` (CORS only restricts
-  browser-side calls); a server-to-server call needs nothing added here.
-- `PUT /api/libraries/<id>` — body `{playerName, pgn}` → `{"status":"ok"}` (200) or
-  `{"error":"not found"}` (404). **No auth** — same trust model as `GET`, the id itself is
-  the only access control. This is what turns an anonymous library from a read-only
-  snapshot into a shared, live-editable one: unlike `POST /api/libraries` (always inserts
-  a new row/new id), this updates the *same* row in place, so the link a team was given
-  keeps working and keeps showing the latest state no matter how many times it's edited.
+- `POST /api/libraries/new` — body `{password}` (optional) → `{id}` (201). Creates an
+  empty `libraries` row (`player_name="Team Library"`, `pgn=""`). This is **the** API for
+  minting a new shared library link programmatically — any project, this user's or
+  otherwise, should call this rather than `POST /api/libraries` (which requires non-empty
+  `pgn` and was designed for "save my current library," not "hand me a blank one to build
+  up"). A caller running in its own frontend JS needs its origin added to `ALLOWED_ORIGIN`
+  (CORS only restricts browser-side calls); a server-to-server call needs nothing added
+  here. If `password` is given (8–128 chars, same bounds as account passwords; 400 if out
+  of range), the library is created already password-protected — see "Team library
+  passwords" below.
+- `PUT /api/libraries/<id>` — body `{playerName, pgn}` → `{"status":"ok"}` (200),
+  `{"error":"not found"}` (404), or, if the library is password-protected, `401` (missing
+  header → `{"error":"password required"}`, wrong one → `{"error":"incorrect password"}`).
+  **No auth beyond the optional password** — same trust model as `GET`, the id itself is
+  the only *required* access control. This is what turns an anonymous library from a
+  read-only snapshot into a shared, live-editable one: unlike `POST /api/libraries`
+  (always inserts a new row/new id), this updates the *same* row in place, so the link a
+  team was given keeps working and keeps showing the latest state no matter how many times
+  it's edited.
 - `GET /team/new` — no JSON, no JS: creates a new empty library the same way as
   `POST /api/libraries/new`, then 302-redirects to `/team/<id>`. A plain link meant for
   anywhere only a raw `<a href>` is available (a README, a pinned chat message, another
-  app's own markup) — visiting it *is* the act of creating a library.
+  app's own markup) — visiting it *is* the act of creating a library. **No password option**
+  — there's nowhere for a visitor to type one on the way through a redirect; a password can
+  still be added afterward from the library's own page (`POST /api/libraries/<id>/password`).
+- `POST /api/libraries/<id>/password` — body `{currentPassword, newPassword}` →
+  `{"status":"ok", "passwordProtected": bool}` (200). Sets, changes, or removes a team
+  library's password (empty/omitted `newPassword` removes protection). If the library
+  currently has no password, anyone with the link may set the first one — `currentPassword`
+  is ignored. If it already has one, `currentPassword` must match it (401
+  `{"error":"incorrect password"}` otherwise) before it can be changed or removed. 404 if
+  the library doesn't exist, 400 if `newPassword` is out of the 8–128 char range.
 
 Accounts:
 - `POST /api/auth/signup` — body `{username, password}` → `{token, username}` (201).
@@ -182,9 +201,10 @@ projects), and the plain `GET /team/new` redirect link (for anywhere only a raw 
 - **Same trust model as every other anonymous link in this app, just extended from
   read-only to read-write.** An anonymous `libraries` row was already "possession of the
   id is the only access control" for reading (`GET /api/libraries/<id>`); a team library
-  is the same row, with `PUT /api/libraries/<id>` (no auth) added so it can be *updated*
-  in place by anyone with the link too — same idea as an unlisted Google Doc set to
-  "anyone with the link can edit," not a new paradigm for this app.
+  is the same row, with `PUT /api/libraries/<id>` added so it can be *updated* in place by
+  anyone with the link too — same idea as an unlisted Google Doc set to "anyone with the
+  link can edit," not a new paradigm for this app. An optional password (below) layers a
+  second factor on top of the link for whoever wants it; it's still not accounts/ACLs.
 - **`/team/<id>` is a real Flask route** (`serve_team_library`), not just a client-side
   path — unlike `?lib=<id>` (a query string on the already-served `/`), a path segment
   needs its own server-side route or Flask 404s before any frontend JS runs. It serves the
@@ -230,6 +250,62 @@ projects), and the plain `GET /team/new` redirect link (for anywhere only a raw 
   library" flow are unrelated and unchanged by any of this — a team library is a third,
   distinct kind of link, not a replacement for either.
 
+### Team library passwords
+
+Added 2026-10-07: an optional password on top of a team library's link, requested
+alongside the original feature's own workflow (set one while creating a library, or add one
+to an existing one from its own page) — see "Endpoints" above for the exact routes.
+
+- **An additive second factor, not a replacement for the link-is-the-key model.** A
+  password-protected library is still only reachable via its id; the password is an extra
+  check layered on top for whoever wants their team's link to survive being pasted
+  somewhere more public than intended, not a new access-control paradigm (no usernames, no
+  per-person permissions — one shared password for the whole library, same as its link is
+  one shared id for the whole library). `password_hash` (nullable, `pbkdf2:sha256` via
+  `generate_password_hash`/`check_password_hash` — same pinned method as account passwords,
+  for the same `scrypt`-needs-a-capable-OpenSSL-build reason, see "Auth design notes"
+  below) lives on the same `libraries` row; `NULL` means unprotected, exactly like every
+  pre-existing anonymous/team row before this feature existed.
+- **Both `GET` and `PUT /api/libraries/<id>` gate on it identically** (`_library_password_error()`
+  in `app.py`, shared by both routes) — a protected library can't be read without the
+  password either, not just edited. The password travels as a custom
+  `X-Team-Library-Password` request header (`TEAM_LIBRARY_PASSWORD_HEADER` in both
+  `app.py` and `static/index.html`), not a query param (keeps it out of server logs/browser
+  history) and not `Authorization: Bearer` (that header already means "this is an account
+  session token" elsewhere in this app — reusing it here for an unrelated, much weaker
+  secret would blur a distinction worth keeping clear).
+- **Setting the first password needs no current one; changing or removing an existing one
+  does.** `POST /api/libraries/<id>/password` treats "no password yet" as "anyone with the
+  link may set the first one" (consistent with the link-is-the-key model above — there's no
+  admin token to check against, same as every other team-library write), but once a
+  password exists, changing or clearing it requires supplying the current one. Without
+  that second rule, anyone who merely had the (now-protected) link — without knowing the
+  password — could strip protection back off a library they can't even read the contents
+  of, which would make the whole feature pointless the moment a protected link leaked
+  anywhere. This is deliberately a separate endpoint from `PUT` (content vs. protection are
+  different concerns) and deliberately not implemented by reusing `_library_password_error()`
+  — that helper's rule ("no password set → request may proceed") is exactly backwards from
+  what setting a *new* password needs to check.
+- **Frontend**: `teamLibPasswordModal` (`static/index.html`) does double duty via
+  `teamLibPwMode`, switched between `"unlock"` (prompting for a known-protected library's
+  password, shown automatically by `init()` on a `/team/<id>` visit that 401s, and again
+  with an inline error on a wrong guess rather than closing/reopening) and `"manage"` (the
+  banner's lock button, `#teamLibPasswordBtn` — labeled "Password protect" or "Change
+  password" depending on `teamLibraryProtected`). A successfully-entered password is
+  remembered for the rest of that visit in two places: `teamLibraryPassword` (sent as the
+  header on every subsequent `GET`/`PUT`, including the debounced auto-save) and
+  `sessionStorage` under `teamLibPw:<id>` (so a reload within the same tab doesn't re-prompt
+  — cleared automatically by the browser when the tab closes, unlike `localStorage`, which
+  was deliberately not used here: this is closer to "unlocked for this visit" than "remember
+  me forever on this device," and a tab-scoped secret that outlives a page reload but not
+  the session felt like the safer default for a password someone else on the team also
+  knows). Creating a library with a password from the landing page stores it into
+  `sessionStorage` *before* navigating to `/team/<id>`, so the just-created library opens
+  unlocked immediately rather than immediately prompting its own creator for the password
+  they just typed one screen ago.
+- **`GET /team/new` has no password option** (see "Endpoints" above) — a password can
+  still be added afterward via the manage modal once the library's own page is open.
+
 ## Auth design notes
 
 - **Bearer tokens, not cookies.** The frontend (`library.chessscenes.com`) and backend
@@ -250,7 +326,9 @@ projects), and the plain `GET /team/new` redirect link (for anywhere only a raw 
 ## Schema
 
 - `libraries` — `(id TEXT PRIMARY KEY, player_name TEXT, pgn TEXT, created_at
-  TIMESTAMPTZ DEFAULT now())`.
+  TIMESTAMPTZ DEFAULT now())`, plus `updated_at` and a nullable `password_hash` (see "Team
+  library passwords" above — `NULL` for every row except a password-protected team
+  library).
 - `users` — `(id SERIAL PRIMARY KEY, username TEXT, password_hash TEXT, created_at
   TIMESTAMPTZ DEFAULT now())` plus a functional unique index on `LOWER(username)` for
   case-insensitive uniqueness while preserving display casing.
